@@ -146,8 +146,11 @@ export function resolveSessionPath(tool) {
       st.bindingLevel = b.level || null;
       return st.path;
     }
+    // Manifest loaded but tool is unbound — final state, no retry
+    st.relayMode = 'pane';
+    return null;
   }
-  // Bindings manifest not yet written or tool not bound
+  // Manifest not yet written — genuinely pending
   st.relayMode = 'pending';
   return null;
 }
@@ -625,9 +628,9 @@ if (isMain) {
       const level = st.bindingLevel ? ` [${st.bindingLevel}]` : '';
       console.log(`${C.green}${tool}: session-bound relay active${level}${C.reset}`);
     } else if (st.relayMode === 'pending') {
-      console.log(`${C.yellow}${tool}: session binding pending — will retry${C.reset}`);
+      console.log(`${C.yellow}${tool}: binding manifest not yet available${C.reset}`);
     } else {
-      console.log(`${C.yellow}${tool}: pane-capture relay (no session binding)${C.reset}`);
+      console.log(`${C.yellow}${tool}: pane-capture relay (binding failed)${C.reset}`);
     }
   }
 

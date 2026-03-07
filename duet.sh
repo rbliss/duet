@@ -68,11 +68,14 @@ mkdir -p "$STATE_DIR"
 # --- Session binding ---
 # Claude: --session-id gives us a known UUID; we find the file by name after launch.
 #   Guarantee: process-level (UUID is unique to this exact launch).
-# Codex: launched with CODEX_HOME pointing to a run-scoped overlay directory.
-#   Guarantee: process-level (isolated session store — only our Codex writes there).
+# Codex: two-tier binding strategy:
+#   1. Primary: CODEX_HOME overlay isolates session storage (process-level ownership).
+#   2. Fallback: if overlay produces no session files (CODEX_HOME ignored/broken),
+#      bind-sessions.sh falls back to scanning ~/.codex/sessions/ with cwd matching
+#      (workspace-level ownership). The binding level in the manifest reflects which
+#      path was actually taken.
 #   Only read-only config/auth are shared; mutable state stores are NOT symlinked.
-#   Note: CODEX_HOME is recognized by Codex but may not be an officially supported
-#   configuration surface. If it stops working, Codex binding degrades to workspace-level.
+#   Note: CODEX_HOME is recognized by Codex but may not be officially supported.
 CLAUDE_SESSION_ID=$(uuidgen)
 export CLAUDE_SESSION_ID
 export CLAUDE_PROJECTS="$HOME/.claude/projects"

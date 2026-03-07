@@ -1,6 +1,6 @@
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { existsSync } from 'fs';
 
 import { writeFileSync, mkdirSync, rmSync, appendFileSync } from 'fs';
@@ -883,7 +883,7 @@ describe('end-to-end session binding', () => {
     assert.equal(resolveSessionPath('claude'), claudeLog);
   });
 
-  it('treats unbound status as not bound even if path present', () => {
+  it('treats unbound status as final pane mode, not pending', () => {
     resetSessionState();
     writeBindings(
       { path: claudeLog, level: null, status: 'unbound', confirmedAt: null },
@@ -891,7 +891,7 @@ describe('end-to-end session binding', () => {
     );
 
     assert.equal(resolveSessionPath('claude'), null);
-    assert.equal(sessionState.claude.relayMode, 'pending');
+    assert.equal(sessionState.claude.relayMode, 'pane');
   });
 
   it('relayMode stays session after transient fallback in getCleanResponse', () => {
@@ -923,11 +923,13 @@ describe('launcher binding contract', () => {
   const stateDir = join(testDir, 'state');
   const claudeProjects = join(testDir, 'claude-projects');
   const codexSessions = join(testDir, 'codex-sessions');
+  const globalCodexSessions = join(testDir, 'global-codex-sessions');
 
   before(() => {
     mkdirSync(stateDir, { recursive: true });
     mkdirSync(claudeProjects, { recursive: true });
     mkdirSync(codexSessions, { recursive: true });
+    mkdirSync(globalCodexSessions, { recursive: true });
   });
 
   after(() => {
@@ -940,6 +942,8 @@ describe('launcher binding contract', () => {
       STATE_DIR: stateDir,
       CLAUDE_PROJECTS: claudeProjects,
       CODEX_SESSIONS: codexSessions,
+      GLOBAL_CODEX_SESSIONS: globalCodexSessions,
+      WORKDIR: '/test/workdir',
       BIND_TIMEOUT: '2',
       ...env,
     };
@@ -950,8 +954,7 @@ describe('launcher binding contract', () => {
 
   function cleanState() {
     try { rmSync(join(stateDir, 'bindings.json')); } catch {}
-    // Clean session files
-    try { execSync(`rm -rf ${claudeProjects}/* ${codexSessions}/*`); } catch {}
+    try { execSync(`rm -rf ${claudeProjects}/* ${codexSessions}/* ${globalCodexSessions}/*`); } catch {}
   }
 
   it('binds claude when UUID-named log exists', () => {
@@ -1025,6 +1028,53 @@ describe('launcher binding contract', () => {
     const bindings = JSON.parse(execSync(`cat ${join(stateDir, 'bindings.json')}`, { encoding: 'utf8' }));
     assert.equal(bindings.codex.status, 'bound');
     assert.equal(bindings.codex.path, codexFile);
+  });
+
+  it('falls back to global codex sessions with cwd match when overlay is empty', () => {
+    cleanState();
+    const globalFile = join(globalCodexSessions, 'fallback-session.jsonl');
+    const meta = JSON.stringify({ type: 'session_meta', payload: { id: 'fb-id', cwd: '/test/workdir' } });
+    // File must appear after bind-sessions.sh takes its before-snapshot.
+    // Spawn detached background process that creates it after 1s.
+    const child = spawn('bash', ['-c', `sleep 1; echo '${meta}' > '${globalFile}'`], { detached: true, stdio: 'ignore' });
+    child.unref();
+
+    runBind({ CLAUDE_SESSION_ID: 'nonexistent' });
+
+    const bindings = JSON.parse(execSync(`cat ${join(stateDir, 'bindings.json')}`, { encoding: 'utf8' }));
+    assert.equal(bindings.codex.status, 'bound');
+    assert.equal(bindings.codex.path, globalFile);
+    assert.equal(bindings.codex.level, 'workspace');
+  });
+
+  it('fallback ignores global codex sessions with wrong cwd', () => {
+    cleanState();
+    const globalFile = join(globalCodexSessions, 'wrong-cwd.jsonl');
+    const meta = JSON.stringify({ type: 'session_meta', payload: { id: 'wrong', cwd: '/other/dir' } });
+    const child = spawn('bash', ['-c', `sleep 1; echo '${meta}' > '${globalFile}'`], { detached: true, stdio: 'ignore' });
+    child.unref();
+
+    runBind({ CLAUDE_SESSION_ID: 'nonexistent' });
+
+    const bindings = JSON.parse(execSync(`cat ${join(stateDir, 'bindings.json')}`, { encoding: 'utf8' }));
+    assert.equal(bindings.codex.status, 'unbound');
+  });
+
+  it('prefers isolated store over global fallback', () => {
+    cleanState();
+    // Both isolated and global have files
+    const isolatedFile = join(codexSessions, 'isolated.jsonl');
+    writeFileSync(isolatedFile, JSON.stringify({ type: 'session_meta', payload: { id: 'iso', cwd: '/test/workdir' } }) + '\n');
+
+    const globalFile = join(globalCodexSessions, 'global.jsonl');
+    writeFileSync(globalFile, JSON.stringify({ type: 'session_meta', payload: { id: 'glob', cwd: '/test/workdir' } }) + '\n');
+
+    runBind({ CLAUDE_SESSION_ID: 'nonexistent' });
+
+    const bindings = JSON.parse(execSync(`cat ${join(stateDir, 'bindings.json')}`, { encoding: 'utf8' }));
+    assert.equal(bindings.codex.status, 'bound');
+    assert.equal(bindings.codex.path, isolatedFile);
+    assert.equal(bindings.codex.level, 'process');
   });
 });
 
