@@ -85,7 +85,7 @@ Node.js process providing the interactive command interface. Pure manifest consu
 - **Content diffing** (`getNewContent`): prefix/suffix structural matching for pane output, handles TUI chrome (content inserted above preserved footer)
 - **Mention detection** (`detectMentions`): finds `@claude` / `@codex` in tool output for watch mode
 - **Converse mode**: multi-round turn-based relay with configurable round count, no cooldown needed (turn tracking prevents loops)
-- **Watch mode**: monitors for @mentions with 8s cooldown between auto-relays
+- **Watch mode**: monitors for @mentions with 8s per-direction cooldown between auto-relays (claude→codex and codex→claude tracked independently)
 
 **Lifecycle commands:**
 - `/quit` — stop tools, preserve run state for resume, mark as `stopped`

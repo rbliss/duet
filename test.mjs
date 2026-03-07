@@ -6,7 +6,7 @@ import { existsSync } from 'fs';
 import { writeFileSync, mkdirSync, rmSync, appendFileSync } from 'fs';
 import { join } from 'path';
 
-import { shellEscape, parseInput, sendKeys, capturePane, pasteToPane, focusPane, getNewContent, detectMentions, cleanCapture, extractClaudeResponse, extractCodexResponse, isResponseComplete, sessionState, getClaudeLastResponse, getCodexLastResponse, resolveSessionPath, setStateDir, setDuetMode, setRunDir, updateRunJson, readIncremental } from './router.mjs';
+import { shellEscape, parseInput, sendKeys, capturePane, pasteToPane, focusPane, getNewContent, detectMentions, cleanCapture, extractClaudeResponse, extractCodexResponse, isResponseComplete, sessionState, getClaudeLastResponse, getCodexLastResponse, resolveSessionPath, setStateDir, setDuetMode, setRunDir, updateRunJson, readIncremental, handleNewOutput, lastAutoRelayTime } from './router.mjs';
 import { readFileSync } from 'fs';
 
 // ─── Unit Tests: shellEscape ─────────────────────────────────────────────────
@@ -2041,5 +2041,45 @@ describe('workspace path canonicalization', () => {
     assert.equal(relative, realDir, 'pwd -P should resolve relative path');
 
     rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+// ─── Per-direction relay cooldown ─────────────────────────────────────────────
+
+describe('per-direction relay cooldown', () => {
+  beforeEach(() => {
+    // Clear all cooldown entries
+    for (const key of Object.keys(lastAutoRelayTime)) {
+      delete lastAutoRelayTime[key];
+    }
+  });
+
+  it('allows claude->codex followed by codex->claude within cooldown window', () => {
+    // Simulate claude mentioning @codex
+    handleNewOutput('claude', 'Hey @codex, check this out');
+
+    // The claude->codex direction should have a cooldown timestamp
+    assert.ok(lastAutoRelayTime['claude->codex'] > 0, 'claude->codex cooldown should be set');
+
+    // Simulate codex replying with @claude immediately (within 8s)
+    handleNewOutput('codex', '@claude Got it, looks good!');
+
+    // The codex->claude direction should ALSO have a cooldown timestamp
+    // (previously this was blocked by the single global cooldown)
+    assert.ok(lastAutoRelayTime['codex->claude'] > 0, 'codex->claude cooldown should be set');
+  });
+
+  it('blocks same-direction relay within cooldown window', () => {
+    // Simulate claude mentioning @codex
+    handleNewOutput('claude', 'Hey @codex, first message');
+    const firstTime = lastAutoRelayTime['claude->codex'];
+    assert.ok(firstTime > 0);
+
+    // Simulate claude mentioning @codex again immediately
+    handleNewOutput('claude', 'Hey @codex, second message');
+
+    // The timestamp should NOT be updated (relay was blocked)
+    assert.equal(lastAutoRelayTime['claude->codex'], firstTime,
+      'same-direction relay should be blocked within cooldown');
   });
 });

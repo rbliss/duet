@@ -409,7 +409,9 @@ const RELAY_COOLDOWN_MS = 8000;     // prevent rapid-fire auto-relays (watch mod
 
 let rl = null; // set when running as main
 let watchInterval = null;
-let lastAutoRelayTime = 0;
+// Per-direction cooldown: keyed by "source->target" (e.g. "claude->codex")
+// so a reply in the opposite direction isn't suppressed.
+export const lastAutoRelayTime = {};
 let converseState = null;       // null | { turn, rounds, maxRounds, topic }
 
 const watchState = {
@@ -560,7 +562,7 @@ function getCleanResponse(source, fallbackContent) {
   return { text, via: 'pane' };
 }
 
-function handleNewOutput(source, newContent) {
+export function handleNewOutput(source, newContent) {
   const other = source === 'claude' ? 'codex' : 'claude';
   const now = Date.now();
 
@@ -574,7 +576,8 @@ function handleNewOutput(source, newContent) {
       return;
     }
 
-    lastAutoRelayTime = now;
+    const direction = `${source}->${other}`;
+    lastAutoRelayTime[direction] = now;
     const { text: response, via } = getCleanResponse(source, newContent);
     console.log(`\n${C.blue}[converse|${via}] round ${converseState.rounds}/${converseState.maxRounds}: ${source} -> ${other}${C.reset}`);
     const msg = `${source} says (round ${converseState.rounds} on "${converseState.topic}"):\n${response}`;
@@ -584,14 +587,15 @@ function handleNewOutput(source, newContent) {
     return;
   }
 
-  // --- @mention detection (with cooldown to prevent loops) ---
-  if (now - lastAutoRelayTime < RELAY_COOLDOWN_MS) return;
+  // --- @mention detection (per-direction cooldown to prevent loops) ---
+  const direction = `${source}->${other}`;
+  if (now - (lastAutoRelayTime[direction] || 0) < RELAY_COOLDOWN_MS) return;
 
   const mentions = detectMentions(newContent);
   const mentionsOther = mentions.includes(other);
 
   if (mentionsOther) {
-    lastAutoRelayTime = now;
+    lastAutoRelayTime[direction] = now;
     const { text: response, via } = getCleanResponse(source, newContent);
     console.log(`\n${C.blue}[auto|${via}] ${source} mentioned @${other} — relaying${C.reset}`);
     const msg = `${source} says:\n${response}`;

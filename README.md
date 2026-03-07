@@ -90,7 +90,7 @@ duet> @claude analyze src/auth.ts — mention @codex if you want a second opinio
 duet> /stop
 ```
 
-Both tools are told they can `@mention` the other. An 8-second cooldown between auto-relays prevents runaway loops.
+Both tools are told they can `@mention` the other. An 8-second per-direction cooldown between auto-relays prevents runaway loops while allowing natural back-and-forth replies (claude→codex and codex→claude are tracked independently).
 
 ### Navigation
 
@@ -136,7 +136,7 @@ For watch and converse modes, the router uses two relay paths depending on sessi
 1. **Session-bound (event-driven)**: Uses `fs.watch()` on the session log file. New JSONL content triggers a relay after a short debounce (200ms with a completion signal, 800ms otherwise). This is the fast path — sub-second latency.
 2. **Pane-only (polling)**: Polls `capture-pane` every 1 second. After 2 unchanged polls (~2s), output is considered stable and relayed. Used when session binding is unavailable.
 
-Tools that start with pending bindings are polled via pane and auto-upgraded to file watching once their binding resolves. In converse mode, the 8-second cooldown is bypassed since turn tracking already prevents loops.
+Tools that start with pending bindings are polled via pane and auto-upgraded to file watching once their binding resolves. The 8-second cooldown is per-direction, so a claude→codex relay does not block an immediate codex→claude reply. In converse mode, the cooldown is bypassed entirely since turn tracking already prevents loops.
 
 Both CLIs run as full interactive processes in their own pseudo-terminals. Duet does not use the APIs -- it wraps the actual CLI tools, preserving all native features.
 
