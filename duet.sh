@@ -127,6 +127,27 @@ setup_codex_home() {
   done
 }
 
+# Build a composed prompt file for a tool.
+# Starts from DUET.md, appends <workdir>/CLAUDE_ROLE.md or CODEX_ROLE.md if present.
+# Usage: build_tool_prompt <tool> <workdir> <output_path>
+build_tool_prompt() {
+  local tool="$1" workdir="$2" output="$3"
+  cp "$DIR/DUET.md" "$output"
+  local role_file
+  if [ "$tool" = "claude" ]; then
+    role_file="$workdir/CLAUDE_ROLE.md"
+  else
+    role_file="$workdir/CODEX_ROLE.md"
+  fi
+  if [ -f "$role_file" ]; then
+    local display_name
+    if [ "$tool" = "claude" ]; then display_name="Claude"; else display_name="Codex"; fi
+    printf '\n\n## Project-specific %s role\n\nThe following instructions come from `%s` in the project root.\n\n' \
+      "$display_name" "$(basename "$role_file")" >> "$output"
+    cat "$role_file" >> "$output"
+  fi
+}
+
 # Create the 3-pane tmux layout (sets CLAUDE_PANE, CODEX_PANE, ROUTER_PANE)
 create_tmux_layout() {
   local session="$1"
@@ -280,17 +301,22 @@ cmd_new() {
   # Create tmux layout
   create_tmux_layout "$tmux_session"
 
+  # Build composed prompt files
+  local claude_prompt_file="$run_dir/runtime/claude-system-prompt.md"
+  local codex_prompt_file="$run_dir/runtime/codex-model-instructions.md"
+  build_tool_prompt claude "$workdir" "$claude_prompt_file"
+  build_tool_prompt codex "$workdir" "$codex_prompt_file"
+
   # Launch tools
-  local duet_prompt q_workdir q_codex_home q_dir q_duet_md
-  duet_prompt=$(cat "$DIR/DUET.md")
+  local claude_prompt q_workdir q_codex_home q_codex_prompt
+  claude_prompt=$(cat "$claude_prompt_file")
   q_workdir=$(quote_path "$workdir")
   q_codex_home=$(quote_path "$codex_home")
-  q_dir=$(quote_path "$DIR")
-  q_duet_md=$(quote_path "$DIR/DUET.md")
+  q_codex_prompt=$(quote_path "$codex_prompt_file")
   tmux send-keys -t "$CLAUDE_PANE" \
-    "cd $q_workdir && claude --dangerously-skip-permissions --session-id $claude_session_id --append-system-prompt '$(echo "$duet_prompt" | sed "s/'/'\\\\''/g")'" Enter
+    "cd $q_workdir && claude --dangerously-skip-permissions --session-id $claude_session_id --append-system-prompt '$(echo "$claude_prompt" | sed "s/'/'\\\\''/g")'" Enter
   tmux send-keys -t "$CODEX_PANE" \
-    "cd $q_workdir && CODEX_HOME=$q_codex_home codex --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=$q_duet_md" Enter
+    "cd $q_workdir && CODEX_HOME=$q_codex_home codex --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=$q_codex_prompt" Enter
 
   # Binding reconciler
   bash "$DIR/bind-sessions.sh" &
@@ -349,26 +375,35 @@ cmd_resume() {
   [ -n "$codex_home" ] || codex_home="$run_dir/codex-home"
   setup_codex_home "$codex_home"
 
+  # Build composed prompt files
+  mkdir -p "$run_dir/runtime"
+  local claude_prompt_file="$run_dir/runtime/claude-system-prompt.md"
+  local codex_prompt_file="$run_dir/runtime/codex-model-instructions.md"
+  build_tool_prompt claude "$cwd" "$claude_prompt_file"
+  build_tool_prompt codex "$cwd" "$codex_prompt_file"
+
   # Build Claude command
-  local claude_cmd q_codex_home q_cwd q_duet_md
+  local claude_cmd q_codex_home q_cwd q_codex_prompt
   q_codex_home=$(quote_path "$codex_home")
   q_cwd=$(quote_path "$cwd")
-  q_duet_md=$(quote_path "$DIR/DUET.md")
+  q_codex_prompt=$(quote_path "$codex_prompt_file")
   if [ -n "$claude_sid" ]; then
-    claude_cmd="claude --dangerously-skip-permissions --resume $claude_sid"
+    local claude_prompt
+    claude_prompt=$(cat "$claude_prompt_file")
+    claude_cmd="claude --dangerously-skip-permissions --resume $claude_sid --append-system-prompt '$(echo "$claude_prompt" | sed "s/'/'\\\\''/g")'"
   else
     claude_sid=$(uuidgen)
-    local duet_prompt
-    duet_prompt=$(cat "$DIR/DUET.md")
-    claude_cmd="claude --dangerously-skip-permissions --session-id $claude_sid --append-system-prompt '$(echo "$duet_prompt" | sed "s/'/'\\\\''/g")'"
+    local claude_prompt
+    claude_prompt=$(cat "$claude_prompt_file")
+    claude_cmd="claude --dangerously-skip-permissions --session-id $claude_sid --append-system-prompt '$(echo "$claude_prompt" | sed "s/'/'\\\\''/g")'"
   fi
 
   # Build Codex command
   local codex_cmd
   if [ -n "$codex_sid" ]; then
-    codex_cmd="CODEX_HOME=$q_codex_home codex resume $codex_sid --dangerously-bypass-approvals-and-sandbox"
+    codex_cmd="CODEX_HOME=$q_codex_home codex resume $codex_sid --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=$q_codex_prompt"
   else
-    codex_cmd="CODEX_HOME=$q_codex_home codex --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=$q_duet_md"
+    codex_cmd="CODEX_HOME=$q_codex_home codex --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=$q_codex_prompt"
   fi
 
   # Update run manifest
@@ -443,23 +478,29 @@ cmd_fork() {
   setup_codex_home "$codex_home"
   new_claude_sid=$(uuidgen)
 
+  # Build composed prompt files
+  local claude_prompt_file="$new_run_dir/runtime/claude-system-prompt.md"
+  local codex_prompt_file="$new_run_dir/runtime/codex-model-instructions.md"
+  build_tool_prompt claude "$cwd" "$claude_prompt_file"
+  build_tool_prompt codex "$cwd" "$codex_prompt_file"
+
   # Build fork commands
-  local claude_cmd codex_cmd duet_prompt q_codex_home q_cwd q_duet_md
-  duet_prompt=$(cat "$DIR/DUET.md")
+  local claude_cmd codex_cmd claude_prompt q_codex_home q_cwd q_codex_prompt
+  claude_prompt=$(cat "$claude_prompt_file")
   q_codex_home=$(quote_path "$codex_home")
   q_cwd=$(quote_path "$cwd")
-  q_duet_md=$(quote_path "$DIR/DUET.md")
+  q_codex_prompt=$(quote_path "$codex_prompt_file")
 
   if [ -n "$claude_sid" ]; then
-    claude_cmd="claude --dangerously-skip-permissions --resume $claude_sid --fork-session --session-id $new_claude_sid --append-system-prompt '$(echo "$duet_prompt" | sed "s/'/'\\\\''/g")'"
+    claude_cmd="claude --dangerously-skip-permissions --resume $claude_sid --fork-session --session-id $new_claude_sid --append-system-prompt '$(echo "$claude_prompt" | sed "s/'/'\\\\''/g")'"
   else
-    claude_cmd="claude --dangerously-skip-permissions --session-id $new_claude_sid --append-system-prompt '$(echo "$duet_prompt" | sed "s/'/'\\\\''/g")'"
+    claude_cmd="claude --dangerously-skip-permissions --session-id $new_claude_sid --append-system-prompt '$(echo "$claude_prompt" | sed "s/'/'\\\\''/g")'"
   fi
 
   if [ -n "$codex_sid" ]; then
-    codex_cmd="CODEX_HOME=$q_codex_home codex fork $codex_sid --dangerously-bypass-approvals-and-sandbox"
+    codex_cmd="CODEX_HOME=$q_codex_home codex fork $codex_sid --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=$q_codex_prompt"
   else
-    codex_cmd="CODEX_HOME=$q_codex_home codex --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=$q_duet_md"
+    codex_cmd="CODEX_HOME=$q_codex_home codex --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=$q_codex_prompt"
   fi
 
   # Write run manifest

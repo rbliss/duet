@@ -118,6 +118,19 @@ When you need to use a tool's native commands (like Claude's `/compact` or Codex
 
 Everything you type goes directly to that tool until you switch back to the router pane.
 
+## Role prompts
+
+You can give each tool a project-specific role by placing markdown files in your workspace root:
+
+```
+CLAUDE_ROLE.md   — appended to Claude Code's system prompt
+CODEX_ROLE.md    — appended to Codex's model instructions
+```
+
+Both files are optional. When present, the contents are appended to the base `DUET.md` prompt under a labeled section. Role prompts are applied on fresh launch, resume, and fork. Attaching to an already-running tmux session does not reapply them.
+
+If you edit a role file, the changes take effect the next time the run is launched or resumed.
+
 ## How it works
 
 ```

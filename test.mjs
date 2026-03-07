@@ -1757,6 +1757,158 @@ describe('durable state directory structure', () => {
   });
 });
 
+// ─── Role prompt injection ────────────────────────────────────────────────────
+
+describe('role prompt injection', () => {
+  const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+
+  it('duet.sh defines build_tool_prompt helper', () => {
+    assert.ok(script.includes('build_tool_prompt()'));
+    assert.ok(script.includes('CLAUDE_ROLE.md'));
+    assert.ok(script.includes('CODEX_ROLE.md'));
+  });
+
+  it('build_tool_prompt composes prompt files under runtime/', () => {
+    assert.ok(script.includes('claude-system-prompt.md'));
+    assert.ok(script.includes('codex-model-instructions.md'));
+  });
+
+  it('cmd_new calls build_tool_prompt for both tools', () => {
+    const cmdNew = script.slice(script.indexOf('cmd_new()'), script.indexOf('cmd_resume()'));
+    assert.ok(cmdNew.includes('build_tool_prompt claude'));
+    assert.ok(cmdNew.includes('build_tool_prompt codex'));
+  });
+
+  it('cmd_resume calls build_tool_prompt for both tools', () => {
+    const cmdResume = script.slice(script.indexOf('cmd_resume()'), script.indexOf('cmd_fork()'));
+    assert.ok(cmdResume.includes('build_tool_prompt claude'));
+    assert.ok(cmdResume.includes('build_tool_prompt codex'));
+  });
+
+  it('cmd_fork calls build_tool_prompt for both tools', () => {
+    const cmdFork = script.slice(script.indexOf('cmd_fork()'), script.indexOf('cmd_list()'));
+    assert.ok(cmdFork.includes('build_tool_prompt claude'));
+    assert.ok(cmdFork.includes('build_tool_prompt codex'));
+  });
+
+  it('claude resume path includes --append-system-prompt', () => {
+    const cmdResume = script.slice(script.indexOf('cmd_resume()'), script.indexOf('cmd_fork()'));
+    // Both the resumed and fresh branches should append system prompt
+    const resumeBranch = cmdResume.slice(cmdResume.indexOf('if [ -n "$claude_sid" ]'));
+    assert.ok(resumeBranch.includes('--resume $claude_sid --append-system-prompt'));
+  });
+
+  it('codex resume path includes model_instructions_file', () => {
+    const cmdResume = script.slice(script.indexOf('cmd_resume()'), script.indexOf('cmd_fork()'));
+    // Both the resumed and fresh codex branches should use model_instructions_file
+    assert.ok(cmdResume.includes('codex resume $codex_sid --dangerously-bypass-approvals-and-sandbox -c model_instructions_file='));
+  });
+
+  it('codex fork path includes model_instructions_file', () => {
+    const cmdFork = script.slice(script.indexOf('cmd_fork()'), script.indexOf('cmd_list()'));
+    assert.ok(cmdFork.includes('codex fork $codex_sid --dangerously-bypass-approvals-and-sandbox -c model_instructions_file='));
+  });
+
+  it('README documents both role prompt files', () => {
+    const readme = readFileSync('/home/claude/duet/README.md', 'utf8');
+    assert.ok(readme.includes('CLAUDE_ROLE.md'));
+    assert.ok(readme.includes('CODEX_ROLE.md'));
+  });
+});
+
+describe('build_tool_prompt integration', () => {
+  const testDir = '/tmp/duet-test-role-' + process.pid;
+  const runtimeDir = join(testDir, 'runtime');
+  const workdir = join(testDir, 'project');
+
+  before(() => {
+    mkdirSync(runtimeDir, { recursive: true });
+    mkdirSync(workdir, { recursive: true });
+  });
+
+  after(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('produces plain DUET.md when no role file exists', () => {
+    const output = join(runtimeDir, 'plain.md');
+    execSync(`bash -c '
+      DIR="/home/claude/duet"
+      build_tool_prompt() {
+        local tool="$1" workdir="$2" output="$3"
+        cp "$DIR/DUET.md" "$output"
+        local role_file display_name
+        if [ "$tool" = "claude" ]; then role_file="$workdir/CLAUDE_ROLE.md"; display_name="Claude"
+        else role_file="$workdir/CODEX_ROLE.md"; display_name="Codex"; fi
+        if [ -f "$role_file" ]; then
+          printf "\\n\\n## Project-specific %s role\\n\\nThe following instructions come from \\\`%s\\\` in the project root.\\n\\n" "$display_name" "$(basename "$role_file")" >> "$output"
+          cat "$role_file" >> "$output"
+        fi
+      }
+      build_tool_prompt claude ${workdir} ${output}
+    '`);
+    const result = readFileSync(output, 'utf8');
+    const duet = readFileSync('/home/claude/duet/DUET.md', 'utf8');
+    assert.equal(result, duet, 'output should be identical to DUET.md when no role file exists');
+  });
+
+  it('appends CLAUDE_ROLE.md content when present', () => {
+    const roleContent = 'You are the lead architect. Focus on system design.';
+    writeFileSync(join(workdir, 'CLAUDE_ROLE.md'), roleContent);
+    const output = join(runtimeDir, 'claude-role.md');
+    execSync(`bash -c '
+      DIR="/home/claude/duet"
+      build_tool_prompt() {
+        local tool="$1" workdir="$2" output="$3"
+        cp "$DIR/DUET.md" "$output"
+        local role_file display_name
+        if [ "$tool" = "claude" ]; then role_file="$workdir/CLAUDE_ROLE.md"; display_name="Claude"
+        else role_file="$workdir/CODEX_ROLE.md"; display_name="Codex"; fi
+        if [ -f "$role_file" ]; then
+          printf "\\n\\n## Project-specific %s role\\n\\nThe following instructions come from \\\`%s\\\` in the project root.\\n\\n" "$display_name" "$(basename "$role_file")" >> "$output"
+          cat "$role_file" >> "$output"
+        fi
+      }
+      build_tool_prompt claude ${workdir} ${output}
+    '`);
+    const result = readFileSync(output, 'utf8');
+    assert.ok(result.includes('## Project-specific Claude role'));
+    assert.ok(result.includes('CLAUDE_ROLE.md'));
+    assert.ok(result.includes(roleContent));
+    // Should also contain DUET.md base
+    assert.ok(result.includes('Duet: Multi-Agent Collaboration'));
+    // Clean up role file
+    rmSync(join(workdir, 'CLAUDE_ROLE.md'));
+  });
+
+  it('appends CODEX_ROLE.md content when present', () => {
+    const roleContent = 'You are the testing specialist. Focus on test coverage.';
+    writeFileSync(join(workdir, 'CODEX_ROLE.md'), roleContent);
+    const output = join(runtimeDir, 'codex-role.md');
+    execSync(`bash -c '
+      DIR="/home/claude/duet"
+      build_tool_prompt() {
+        local tool="$1" workdir="$2" output="$3"
+        cp "$DIR/DUET.md" "$output"
+        local role_file display_name
+        if [ "$tool" = "claude" ]; then role_file="$workdir/CLAUDE_ROLE.md"; display_name="Claude"
+        else role_file="$workdir/CODEX_ROLE.md"; display_name="Codex"; fi
+        if [ -f "$role_file" ]; then
+          printf "\\n\\n## Project-specific %s role\\n\\nThe following instructions come from \\\`%s\\\` in the project root.\\n\\n" "$display_name" "$(basename "$role_file")" >> "$output"
+          cat "$role_file" >> "$output"
+        fi
+      }
+      build_tool_prompt codex ${workdir} ${output}
+    '`);
+    const result = readFileSync(output, 'utf8');
+    assert.ok(result.includes('## Project-specific Codex role'));
+    assert.ok(result.includes('CODEX_ROLE.md'));
+    assert.ok(result.includes(roleContent));
+    assert.ok(result.includes('Duet: Multi-Agent Collaboration'));
+    rmSync(join(workdir, 'CODEX_ROLE.md'));
+  });
+});
+
 // ─── Bug fix: /destroy removes state before killing tmux ─────────────────────
 
 describe('/destroy ordering', () => {
