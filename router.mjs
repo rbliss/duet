@@ -10,7 +10,7 @@ import {
   sessionState, resolveSessionPath, readIncremental,
   extractClaudeResponse, extractCodexResponse, isResponseComplete,
   getClaudeLastResponse, getCodexLastResponse, getLastResponse,
-  setDuetMode,
+  setDuetMode, extractCodexSessionId,
 } from './src/relay/session-reader.mjs';
 import {
   shellEscape, sendKeys, pasteToPane, capturePane, focusPane,
@@ -26,7 +26,7 @@ export {
   sessionState, resolveSessionPath, readIncremental,
   extractClaudeResponse, extractCodexResponse, isResponseComplete,
   getClaudeLastResponse, getCodexLastResponse, getLastResponse,
-  setDuetMode,
+  setDuetMode, extractCodexSessionId,
 } from './src/relay/session-reader.mjs';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
@@ -152,6 +152,9 @@ function startFileWatcher(tool) {
     });
     fileWatchers[tool].on('error', () => {
       stopFileWatcher(tool);
+      watcherFailed.add(tool);
+      console.log(`\n${C.red}${tool}: session watcher failed — automation inactive. Use /rebind ${tool} to repair.${C.reset}`);
+      prompt();
     });
     return true;
   } catch {
@@ -210,11 +213,14 @@ function pollBindings() {
     resolveSessionPath(name);
     const st = sessionState[name];
     if (st.relayMode === 'session' && st.path) {
+      pendingTools.delete(name);
       if (startFileWatcher(name)) {
-        pendingTools.delete(name);
         console.log(`\n${C.green}${name}: binding resolved — session log watcher active${C.reset}`);
-        prompt();
+      } else {
+        watcherFailed.add(name);
+        console.log(`\n${C.red}${name}: binding resolved but watcher failed — automation inactive${C.reset}`);
       }
+      prompt();
     } else if (st.relayMode === 'pane') {
       // degraded — binding failed
       pendingTools.delete(name);
@@ -224,14 +230,23 @@ function pollBindings() {
   }
 }
 
+// Track tools whose watcher failed after binding — bound but not watching
+export const watcherFailed = new Set();
+
 function startPolling() {
   if (watchInterval) return;
   pendingTools = new Set();
+  watcherFailed.clear();
   for (const name of ['claude', 'codex']) {
     resolveSessionPath(name);
     const st = sessionState[name];
-    if (st.relayMode === 'session' && st.path && startFileWatcher(name)) {
-      // event-driven relay via session log
+    if (st.relayMode === 'session' && st.path) {
+      if (startFileWatcher(name)) {
+        // event-driven relay via session log
+      } else {
+        // Bound but watcher failed to start
+        watcherFailed.add(name);
+      }
     } else if (st.relayMode === 'pending') {
       pendingTools.add(name);
     }
@@ -247,6 +262,7 @@ function stopPolling() {
   converseState = null;
   stopFileWatchers();
   pendingTools = new Set();
+  watcherFailed.clear();
 }
 
 // downgradeToPane is removed — stale binding is a status note, not an automatic fallback.
@@ -301,11 +317,18 @@ export async function rebindTool(tool, newPath) {
   } catch {}
   st.lastSessionActivityAt = Date.now();
 
-  const match = newPath.match(/([0-9a-f-]{36})\.jsonl$/i);
-  const newSid = match ? match[1] : null;
+  // Claude: session ID is the filename UUID. Codex: extract payload.id from first JSONL line.
+  let newSid;
+  if (tool === 'codex') {
+    newSid = extractCodexSessionId(newPath);
+  } else {
+    const match = newPath.match(/([0-9a-f-]{36})\.jsonl$/i);
+    newSid = match ? match[1] : null;
+  }
 
   if (startFileWatcher(tool)) {
     pendingTools.delete(tool);
+    watcherFailed.delete(tool);
   }
 
   const updates = { [`${tool}.binding_path`]: newPath, updated_at: new Date().toISOString() };
@@ -336,11 +359,18 @@ export async function handleNewOutput(source, newContent) {
     }
 
     const direction = `${source}->${other}`;
-    lastAutoRelayTime[direction] = now;
     const response = getSessionResponse(source) || newContent;
     console.log(`\n${C.blue}[converse] round ${converseState.rounds}/${converseState.maxRounds}: ${source} -> ${other}${C.reset}`);
     const msg = `${source} says (round ${converseState.rounds} on "${converseState.topic}"):\n${response}`;
-    await pasteToPane(PANES[other], msg);
+    const delivered = await pasteToPane(PANES[other], msg);
+    if (!delivered) {
+      // Don't advance turn or record cooldown on failed delivery
+      converseState.rounds--;
+      console.log(`${C.red}[converse] delivery to ${other} failed — turn not advanced${C.reset}`);
+      prompt();
+      return;
+    }
+    lastAutoRelayTime[direction] = now;
     converseState.turn = other;
     prompt();
     return;
@@ -354,11 +384,15 @@ export async function handleNewOutput(source, newContent) {
   const mentionsOther = mentions.includes(other);
 
   if (mentionsOther) {
-    lastAutoRelayTime[direction] = now;
     const response = getSessionResponse(source) || newContent;
     console.log(`\n${C.blue}[auto] ${source} mentioned @${other} — relaying${C.reset}`);
     const msg = `${source} says:\n${response}`;
-    await pasteToPane(PANES[other], msg);
+    const delivered = await pasteToPane(PANES[other], msg);
+    if (delivered) {
+      lastAutoRelayTime[direction] = now;
+    } else {
+      console.log(`${C.red}[auto] delivery to ${other} failed${C.reset}`);
+    }
     prompt();
   }
 }
@@ -496,7 +530,9 @@ async function handleInput(input) {
       for (const tool of ['claude', 'codex']) {
         const bs = bindingStatus(tool);
         const color = tool === 'claude' ? C.magenta : C.green;
-        if (bs === 'bound') {
+        if (bs === 'bound' && watcherFailed.has(tool)) {
+          console.log(`  ${color}${tool}${C.reset}: ${C.red}inactive${C.reset} (watcher failed — /rebind ${tool})`);
+        } else if (bs === 'bound') {
           console.log(`  ${color}${tool}${C.reset}: ${C.green}active${C.reset} (session-bound)`);
         } else if (bs === 'pending') {
           console.log(`  ${color}${tool}${C.reset}: ${C.yellow}waiting${C.reset} (binding pending)`);
@@ -528,9 +564,9 @@ async function handleInput(input) {
         const color = tool === 'claude' ? C.magenta : C.green;
         const pad = tool === 'claude' ? '' : ' ';
         const level = st.bindingLevel ? ` (${st.bindingLevel})` : '';
-        const watching = fileWatchers[tool] ? ', watching' : pendingTools.has(tool) ? ', polling binding' : '';
-        const bsColor = bs === 'bound' ? C.green : bs === 'pending' ? C.yellow : C.red;
-        const autoLabel = bs === 'bound' ? 'active' : bs === 'pending' ? 'waiting' : 'unavailable';
+        const watching = fileWatchers[tool] ? ', watching' : pendingTools.has(tool) ? ', polling binding' : watcherFailed.has(tool) ? ', watcher failed' : '';
+        const bsColor = (bs === 'bound' && !watcherFailed.has(tool)) ? C.green : bs === 'pending' ? C.yellow : C.red;
+        const autoLabel = (bs === 'bound' && !watcherFailed.has(tool)) ? 'active' : bs === 'pending' ? 'waiting' : (bs === 'bound' && watcherFailed.has(tool)) ? 'inactive' : 'unavailable';
         console.log(`  ${color}${tool}${C.reset}${pad} binding: ${bsColor}${bs}${level}${C.reset}  automation: ${bsColor}${autoLabel}${watching}${C.reset}`);
       }
       return;
@@ -565,15 +601,18 @@ async function handleInput(input) {
         return;
       }
       startPolling();
-      converseState = {
-        turn: 'claude',
-        rounds: 0,
-        maxRounds: parsed.maxRounds,
-        topic: parsed.topic,
-      };
       console.log(`${C.cyan}Starting conversation: "${parsed.topic}" (${parsed.maxRounds} rounds)${C.reset}`);
       const opener = `Let's discuss with @codex: ${parsed.topic}`;
-      await pasteToPane(PANES.claude, opener);
+      if (await pasteToPane(PANES.claude, opener)) {
+        converseState = {
+          turn: 'claude',
+          rounds: 0,
+          maxRounds: parsed.maxRounds,
+          topic: parsed.topic,
+        };
+      } else {
+        console.log(`${C.red}Failed to deliver opener to claude — conversation not started${C.reset}`);
+      }
       return;
     }
     case 'focus':
@@ -608,25 +647,42 @@ async function handleInput(input) {
       const msg = parsed.prompt
         ? `${parsed.prompt.trim()}\n\n${parsed.from} says:\n${response}`
         : `${parsed.from} says:\n${response}`;
-      await pasteToPane(PANES[parsed.to], msg);
-      console.log(`${C.blue}Relayed ${parsed.from} -> ${parsed.to}${C.reset}`);
+      if (await pasteToPane(PANES[parsed.to], msg)) {
+        console.log(`${C.blue}Relayed ${parsed.from} -> ${parsed.to}${C.reset}`);
+      } else {
+        console.log(`${C.red}Failed to relay to ${parsed.to}${C.reset}`);
+      }
       return;
     }
     case 'relay_error':
       console.log(`Usage: @relay claude>codex [optional prompt]`);
       return;
-    case 'both':
-      await sendKeys(PANES.claude, parsed.msg);
-      await sendKeys(PANES.codex, parsed.msg);
-      console.log(`${C.yellow}-> both${C.reset}`);
+    case 'both': {
+      const [cOk, xOk] = await Promise.all([
+        sendKeys(PANES.claude, parsed.msg),
+        sendKeys(PANES.codex, parsed.msg),
+      ]);
+      if (cOk && xOk) {
+        console.log(`${C.yellow}-> both${C.reset}`);
+      } else {
+        const failed = [!cOk && 'claude', !xOk && 'codex'].filter(Boolean).join(', ');
+        console.log(`${C.red}Failed to send to ${failed}${C.reset}`);
+      }
       return;
+    }
     case 'claude':
-      await sendKeys(PANES.claude, parsed.msg);
-      console.log(`${C.magenta}-> claude${C.reset}`);
+      if (await sendKeys(PANES.claude, parsed.msg)) {
+        console.log(`${C.magenta}-> claude${C.reset}`);
+      } else {
+        console.log(`${C.red}Failed to send to claude${C.reset}`);
+      }
       return;
     case 'codex':
-      await sendKeys(PANES.codex, parsed.msg);
-      console.log(`${C.green}-> codex${C.reset}`);
+      if (await sendKeys(PANES.codex, parsed.msg)) {
+        console.log(`${C.green}-> codex${C.reset}`);
+      } else {
+        console.log(`${C.red}Failed to send to codex${C.reset}`);
+      }
       return;
     case 'unknown_command':
       console.log(`${C.dim}Unknown command. /help for usage.${C.reset}`);
@@ -666,7 +722,9 @@ if (isMain) {
     const bs = bindingStatus(tool);
     const st = sessionState[tool];
     const level = st.bindingLevel ? ` [${st.bindingLevel}]` : '';
-    if (bs === 'bound') {
+    if (bs === 'bound' && watcherFailed.has(tool)) {
+      console.log(`${C.red}${tool}: session-bound but watcher failed — automation inactive${C.reset}`);
+    } else if (bs === 'bound') {
       console.log(`${C.green}${tool}: session-bound — automation active${level}${C.reset}`);
     } else if (bs === 'pending') {
       console.log(`${C.yellow}${tool}: binding pending — automation will start when bound${C.reset}`);

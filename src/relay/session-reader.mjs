@@ -1,4 +1,4 @@
-import { statSync, openSync, readSync, closeSync } from 'fs';
+import { statSync, openSync, readSync, closeSync, readFileSync } from 'fs';
 import { STATE_DIR, loadBindings } from '../runtime/bindings-store.mjs';
 import { updateRunJson } from '../runtime/run-store.mjs';
 
@@ -165,4 +165,19 @@ export function getCodexLastResponse() {
 
 export function getLastResponse(tool) {
   return tool === 'claude' ? getClaudeLastResponse() : getCodexLastResponse();
+}
+
+// Extract Codex session ID from payload.id in the first JSONL line.
+// Matches bind-sessions.sh's extract_codex_session_id behavior.
+export function extractCodexSessionId(filePath) {
+  try {
+    const content = readFileSync(filePath, 'utf8');
+    const firstLine = content.split('\n')[0];
+    if (!firstLine) return null;
+    const obj = JSON.parse(firstLine);
+    const id = obj?.payload?.id;
+    return id || null;
+  } catch {
+    return null;
+  }
 }
