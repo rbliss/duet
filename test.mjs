@@ -6,7 +6,7 @@ import { existsSync } from 'fs';
 import { writeFileSync, mkdirSync, rmSync, appendFileSync } from 'fs';
 import { join } from 'path';
 
-import { shellEscape, parseInput, sendKeys, capturePane, pasteToPane, focusPane, getNewContent, detectMentions, cleanCapture, extractClaudeResponse, extractCodexResponse, sessionState, getClaudeLastResponse, getCodexLastResponse, resolveSessionPath, setStateDir } from './router.mjs';
+import { shellEscape, parseInput, sendKeys, capturePane, pasteToPane, focusPane, getNewContent, detectMentions, cleanCapture, extractClaudeResponse, extractCodexResponse, isResponseComplete, sessionState, getClaudeLastResponse, getCodexLastResponse, resolveSessionPath, setStateDir } from './router.mjs';
 
 // ─── Unit Tests: shellEscape ─────────────────────────────────────────────────
 
@@ -214,6 +214,77 @@ describe('getNewContent', () => {
     const current = 'prompt$ cmd\n\noutput1\n\noutput2\nprompt$';
     const result = getNewContent(baseline, current);
     assert.ok(result.includes('output2'));
+  });
+
+  it('detects content inserted above preserved footer (Claude TUI pattern)', () => {
+    // Claude's TUI inserts new assistant output above a preserved prompt/footer.
+    // The old tail-matching algorithm returned empty because it found the footer
+    // at the bottom and took everything after it (nothing).
+    const baseline = [
+      '> analyze the error handling',
+      '',
+      'Thinking...',
+      '',
+      '╭─────────────────────────────────╮',
+      '│  ⏎ to send  /help for commands  │',
+      '╰─────────────────────────────────╯',
+    ].join('\n');
+    const current = [
+      '> analyze the error handling',
+      '',
+      "I've analyzed the error handling.",
+      'I think @codex should review this.',
+      'The main issues are:',
+      '1. Missing try/catch in auth.ts',
+      '',
+      '╭─────────────────────────────────╮',
+      '│  ⏎ to send  /help for commands  │',
+      '╰─────────────────────────────────╯',
+    ].join('\n');
+    const result = getNewContent(baseline, current);
+    assert.ok(result.includes('@codex'), `Expected @codex mention in result, got: "${result}"`);
+    assert.ok(result.includes('Missing try/catch'));
+    assert.ok(!result.includes('⏎ to send'), 'Should not include preserved footer');
+  });
+
+  it('detects content inserted above footer with identical prompt line', () => {
+    // Even when a prompt line appears both above and below the new content
+    const baseline = [
+      'Claude Code v1.0',
+      '> some prompt',
+      '$',
+    ].join('\n');
+    const current = [
+      'Claude Code v1.0',
+      '> some prompt',
+      'Here is my response mentioning @codex for review.',
+      '$',
+    ].join('\n');
+    const result = getNewContent(baseline, current);
+    assert.ok(result.includes('@codex'), `Expected @codex mention, got: "${result}"`);
+    assert.ok(!result.includes('Claude Code'), 'Should not include preserved header');
+  });
+
+  it('handles content inserted between header and multi-line footer', () => {
+    const baseline = [
+      'header line 1',
+      'header line 2',
+      'footer line 1',
+      'footer line 2',
+    ].join('\n');
+    const current = [
+      'header line 1',
+      'header line 2',
+      'NEW LINE A',
+      'NEW LINE B with @codex',
+      'footer line 1',
+      'footer line 2',
+    ].join('\n');
+    const result = getNewContent(baseline, current);
+    assert.ok(result.includes('NEW LINE A'));
+    assert.ok(result.includes('@codex'));
+    assert.ok(!result.includes('header line'));
+    assert.ok(!result.includes('footer line'));
   });
 });
 
@@ -628,6 +699,44 @@ describe('extractCodexResponse', () => {
   });
 });
 
+// ─── Unit Tests: isResponseComplete ──────────────────────────────────────────
+
+describe('isResponseComplete', () => {
+  it('detects claude result type', () => {
+    assert.equal(isResponseComplete('claude', { type: 'result', result: {} }), true);
+  });
+
+  it('detects claude stop_reason end_turn', () => {
+    const obj = { message: { role: 'assistant', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' } };
+    assert.equal(isResponseComplete('claude', obj), true);
+  });
+
+  it('returns false for claude assistant without stop_reason', () => {
+    const obj = { message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] } };
+    assert.equal(isResponseComplete('claude', obj), false);
+  });
+
+  it('returns false for claude user message', () => {
+    const obj = { message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } };
+    assert.equal(isResponseComplete('claude', obj), false);
+  });
+
+  it('detects codex task_complete', () => {
+    const obj = { payload: { type: 'task_complete', last_agent_message: 'Done!' } };
+    assert.equal(isResponseComplete('codex', obj), true);
+  });
+
+  it('returns false for codex event_msg', () => {
+    const obj = { type: 'event_msg', payload: { type: 'message', role: 'assistant', content: [] } };
+    assert.equal(isResponseComplete('codex', obj), false);
+  });
+
+  it('returns false for unrelated objects', () => {
+    assert.equal(isResponseComplete('claude', { type: 'ping' }), false);
+    assert.equal(isResponseComplete('codex', { type: 'ping' }), false);
+  });
+});
+
 // ─── Integration Tests: incremental session reader ───────────────────────────
 
 describe('incremental session reader', () => {
@@ -883,15 +992,53 @@ describe('end-to-end session binding', () => {
     assert.equal(resolveSessionPath('claude'), claudeLog);
   });
 
-  it('treats unbound status as final pane mode, not pending', () => {
+  it('stays pending when manifest says pending', () => {
     resetSessionState();
     writeBindings(
-      { path: claudeLog, level: null, status: 'unbound', confirmedAt: null },
-      { path: null, level: null, status: 'unbound', confirmedAt: null }
+      { path: null, level: null, status: 'pending', confirmedAt: null },
+      { path: null, level: null, status: 'pending', confirmedAt: null }
+    );
+
+    assert.equal(resolveSessionPath('claude'), null);
+    assert.equal(sessionState.claude.relayMode, 'pending');
+    assert.equal(sessionState.claude.resolved, false);
+  });
+
+  it('degrades to pane when manifest says degraded', () => {
+    resetSessionState();
+    writeBindings(
+      { path: null, level: null, status: 'degraded', confirmedAt: null },
+      { path: null, level: null, status: 'degraded', confirmedAt: null }
     );
 
     assert.equal(resolveSessionPath('claude'), null);
     assert.equal(sessionState.claude.relayMode, 'pane');
+    assert.equal(sessionState.claude.resolved, true);
+  });
+
+  it('re-reads manifest when status changes from pending to bound', () => {
+    resetSessionState();
+    const msg = JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'Late arrival' }] } });
+    writeFileSync(claudeLog, msg + '\n');
+
+    // First call: pending
+    writeBindings(
+      { path: null, level: null, status: 'pending', confirmedAt: null },
+      { path: null, level: null, status: 'pending', confirmedAt: null }
+    );
+    assert.equal(resolveSessionPath('claude'), null);
+    assert.equal(sessionState.claude.relayMode, 'pending');
+
+    // Binder updates manifest to bound
+    writeBindings(
+      { path: claudeLog, level: 'process', status: 'bound', confirmedAt: new Date().toISOString() },
+      { path: null, level: null, status: 'pending', confirmedAt: null }
+    );
+
+    // Second call: should pick up the updated manifest
+    assert.equal(resolveSessionPath('claude'), claudeLog);
+    assert.equal(sessionState.claude.relayMode, 'session');
+    assert.equal(getClaudeLastResponse(), 'Late arrival');
   });
 
   it('relayMode stays session after transient fallback in getCleanResponse', () => {
@@ -913,6 +1060,82 @@ describe('end-to-end session binding', () => {
 
     // relayMode should still be 'session' — getCleanResponse never downgrades it
     assert.equal(sessionState.claude.relayMode, 'session');
+  });
+});
+
+// ─── Integration Tests: binding lifecycle (pending → bound/degraded) ─────────
+
+describe('binding lifecycle', () => {
+  const lifecycleDir = '/tmp/duet-test-lifecycle-' + process.pid;
+  const stateDir2 = join(lifecycleDir, 'state');
+  const sessionDir2 = join(lifecycleDir, 'sessions');
+  const claudeLog2 = join(sessionDir2, 'lifecycle-claude.jsonl');
+
+  let origClaude2;
+
+  before(() => {
+    mkdirSync(stateDir2, { recursive: true });
+    mkdirSync(sessionDir2, { recursive: true });
+    origClaude2 = { ...sessionState.claude };
+  });
+
+  after(() => {
+    setStateDir(null);
+    Object.assign(sessionState.claude, origClaude2);
+    rmSync(lifecycleDir, { recursive: true, force: true });
+  });
+
+  it('loadBindings re-reads manifest while tools are pending', () => {
+    setStateDir(stateDir2);
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+
+    // Write pending manifest
+    writeFileSync(join(stateDir2, 'bindings.json'), JSON.stringify({
+      claude: { path: null, level: null, status: 'pending', confirmedAt: null },
+      codex: { path: null, level: null, status: 'pending', confirmedAt: null },
+    }));
+
+    // First call — pending
+    assert.equal(resolveSessionPath('claude'), null);
+    assert.equal(sessionState.claude.relayMode, 'pending');
+
+    // Binder updates manifest
+    const msg = JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] } });
+    writeFileSync(claudeLog2, msg + '\n');
+    writeFileSync(join(stateDir2, 'bindings.json'), JSON.stringify({
+      claude: { path: claudeLog2, level: 'process', status: 'bound', confirmedAt: new Date().toISOString() },
+      codex: { path: null, level: null, status: 'pending', confirmedAt: null },
+    }));
+
+    // Second call — should re-read and find bound
+    assert.equal(resolveSessionPath('claude'), claudeLog2);
+    assert.equal(sessionState.claude.relayMode, 'session');
+  });
+
+  it('stops re-reading manifest once all tools are final', () => {
+    setStateDir(stateDir2);
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+
+    // Write all-degraded manifest (final state)
+    writeFileSync(join(stateDir2, 'bindings.json'), JSON.stringify({
+      claude: { path: null, level: null, status: 'degraded', confirmedAt: null },
+      codex: { path: null, level: null, status: 'degraded', confirmedAt: null },
+    }));
+
+    resolveSessionPath('claude');
+    resolveSessionPath('codex');
+    assert.equal(sessionState.claude.relayMode, 'pane');
+    assert.equal(sessionState.codex.relayMode, 'pane');
+    assert.equal(sessionState.claude.resolved, true);
+    assert.equal(sessionState.codex.resolved, true);
+
+    // Overwrite manifest — should be ignored since both are resolved
+    writeFileSync(join(stateDir2, 'bindings.json'), JSON.stringify({
+      claude: { path: claudeLog2, level: 'process', status: 'bound', confirmedAt: new Date().toISOString() },
+      codex: { path: null, level: null, status: 'degraded', confirmedAt: null },
+    }));
+    assert.equal(resolveSessionPath('claude'), null); // still degraded/pane
   });
 });
 
@@ -986,15 +1209,15 @@ describe('launcher binding contract', () => {
     assert.equal(bindings.codex.level, 'process');
   });
 
-  it('leaves tool unbound when no files appear', () => {
+  it('degrades tools when no files appear before deadline', () => {
     cleanState();
 
     runBind({ CLAUDE_SESSION_ID: 'nonexistent-uuid' });
 
     const bindings = JSON.parse(execSync(`cat ${join(stateDir, 'bindings.json')}`, { encoding: 'utf8' }));
-    assert.equal(bindings.claude.status, 'unbound');
+    assert.equal(bindings.claude.status, 'degraded');
     assert.equal(bindings.claude.path, null);
-    assert.equal(bindings.codex.status, 'unbound');
+    assert.equal(bindings.codex.status, 'degraded');
     assert.equal(bindings.codex.path, null);
   });
 
@@ -1057,7 +1280,7 @@ describe('launcher binding contract', () => {
     runBind({ CLAUDE_SESSION_ID: 'nonexistent' });
 
     const bindings = JSON.parse(execSync(`cat ${join(stateDir, 'bindings.json')}`, { encoding: 'utf8' }));
-    assert.equal(bindings.codex.status, 'unbound');
+    assert.equal(bindings.codex.status, 'degraded');
   });
 
   it('prefers isolated store over global fallback', () => {

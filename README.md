@@ -122,16 +122,21 @@ Everything you type goes directly to that tool until you switch back to the rout
 
 ```
 duet.sh          Launcher — sets up tmux session, pane layout, styling
-router.mjs       Router — parses commands, dispatches via tmux, polls for @mentions
+router.mjs       Router — parses commands, dispatches via tmux, watches for @mentions
 ```
 
 The router communicates with tool panes through tmux primitives:
 
 - **send-keys** sends typed text to a pane (as if you typed it)
-- **capture-pane** reads visible text from a pane (used by `/snap`, `@relay`, watch, converse)
+- **capture-pane** reads visible text from a pane (used by `/snap`, `@relay`, pane polling)
 - **paste-buffer** pastes multiline text into a pane (used by `@relay` and auto-relay)
 
-For watch and converse modes, the router polls each pane every 2 seconds. When a pane's output stops changing for 3 consecutive polls (~6 seconds), it's considered stable and the new output is checked for `@mentions` or relayed to the other tool.
+For watch and converse modes, the router uses two relay paths depending on session binding:
+
+1. **Session-bound (event-driven)**: Uses `fs.watch()` on the session log file. New JSONL content triggers a relay after a short debounce (200ms with a completion signal, 800ms otherwise). This is the fast path — sub-second latency.
+2. **Pane-only (polling)**: Polls `capture-pane` every 1 second. After 2 unchanged polls (~2s), output is considered stable and relayed. Used when session binding is unavailable.
+
+Tools that start with pending bindings are polled via pane and auto-upgraded to file watching once their binding resolves. In converse mode, the 8-second cooldown is bypassed since turn tracking already prevents loops.
 
 Both CLIs run as full interactive processes in their own pseudo-terminals. Duet does not use the APIs -- it wraps the actual CLI tools, preserving all native features.
 
@@ -141,11 +146,11 @@ Both CLIs run as full interactive processes in their own pseudo-terminals. Duet 
 cd ~/duet && node --test test.mjs
 ```
 
-121 tests across 18 suites: shell escaping, input parsing (including converse/watch/stop), content diffing (`getNewContent`), @mention detection (`detectMentions`), tmux integration (sendKeys, capturePane, pasteToPane, focusPane, cross-pane relay), launcher layout, response extraction (Claude and Codex formats), incremental session reader, end-to-end session binding (bindings.json manifest), launcher binding contract (bind-sessions.sh with fallback coverage), and edge cases. Integration tests run against real tmux sessions.
+135 tests across 20 suites: shell escaping, input parsing (including converse/watch/stop), content diffing (`getNewContent` including inserted-above-footer regression), @mention detection (`detectMentions`), tmux integration (sendKeys, capturePane, pasteToPane, focusPane, cross-pane relay), launcher layout, response extraction (Claude and Codex formats), completion detection (`isResponseComplete`), incremental session reader, end-to-end session binding (bindings.json manifest), binding lifecycle (manifest caching and re-reads), launcher binding contract (bind-sessions.sh with fallback coverage), and edge cases. Integration tests run against real tmux sessions.
 
 ## Known limitations
 
 - **Relay fidelity**: `@relay` and auto-relay capture the rendered terminal output, which includes prompts, borders, and TUI chrome. The receiving tool sees this as-is -- readable but not pristine.
 - **Single-line input**: `@claude` and `@codex` send a single line. For multi-line prompts, use `/focus` to interact natively.
-- **Stability detection**: The router waits ~6 seconds of unchanged output to consider a response "done." Fast follow-up outputs within that window are batched; very long pauses mid-response may trigger a premature relay.
+- **Stability detection**: For pane-only tools (no session binding), the router waits ~2 seconds of unchanged output to consider a response "done." Fast follow-up outputs within that window are batched; very long pauses mid-response may trigger a premature relay.
 - **tmux 3.4**: The `split-window -p` (percentage) flag fails on detached sessions. Duet uses `-l` (absolute lines/columns) as a workaround.

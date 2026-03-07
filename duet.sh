@@ -104,10 +104,10 @@ DUET_PROMPT=$(cat "$DUET_INSTRUCTIONS")
 tmux send-keys -t "$CLAUDE_PANE" "cd $WORKDIR && claude --dangerously-skip-permissions --session-id $CLAUDE_SESSION_ID --append-system-prompt '$(echo "$DUET_PROMPT" | sed "s/'/'\\\\''/g")'" Enter
 tmux send-keys -t "$CODEX_PANE" "cd $WORKDIR && CODEX_HOME=$CODEX_OVERLAY codex --dangerously-bypass-approvals-and-sandbox -c model_instructions_file='$DUET_INSTRUCTIONS'" Enter
 
-# Run extracted binding logic (polls for session files, writes bindings.json)
-source "$DIR/bind-sessions.sh"
+# Run binding reconciler in background (keeps polling until all tools are bound or deadline)
+bash "$DIR/bind-sessions.sh" &
 
-# Launch router
+# Launch router (consumes binding manifest, upgrades transport when tools bind)
 tmux send-keys -t "$ROUTER_PANE" \
   "DUET_SESSION=$SESSION CLAUDE_PANE=$CLAUDE_PANE CODEX_PANE=$CODEX_PANE DUET_STATE_DIR=$STATE_DIR node $DIR/router.mjs" \
   Enter

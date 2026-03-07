@@ -22,13 +22,13 @@ Architecturally, that means introducing a per-run state directory with stable me
 ## 2. The watch/converse relay path has an intentional multi-second delay, and that is the main communication bottleneck
 
 **Severity:** High  
-**References:** [router.mjs](/home/claude/duet/router.mjs#L241), [router.mjs](/home/claude/duet/router.mjs#L265), [router.mjs](/home/claude/duet/router.mjs#L282)
+**References:** [router.mjs](/home/claude/duet/router.mjs#L299), [router.mjs](/home/claude/duet/router.mjs#L300), [router.mjs](/home/claude/duet/router.mjs#L323), [router.mjs](/home/claude/duet/router.mjs#L340)
 
-The current design polls each pane every 2 seconds and waits for 3 unchanged polls before treating output as "stable." In practice that means Duet often waits around 6 seconds after an agent has finished speaking before it forwards anything. That is a large delay for a system whose core value proposition is rapid back-and-forth collaboration.
+The current design still polls each pane every 2 seconds and waits for 3 unchanged polls before treating output as "stable." In practice that means Duet often waits around 6 seconds after an agent has finished speaking before it forwards anything. That is a large delay for a system whose core value proposition is rapid back-and-forth collaboration.
 
-This affects both perceived responsiveness and actual throughput. In watch mode, mentions do not trigger a handoff until the stability window expires. In converse mode, every round pays the full debounce cost, so a multi-round exchange becomes dominated by idle waiting rather than useful work. The end result is that the system feels like a batch relay tool instead of a live collaborative console.
+This affects both perceived responsiveness and actual throughput. In watch mode, mentions do not trigger a handoff until the stability window expires. In converse mode, every round pays the full debounce cost, so a multi-round exchange becomes dominated by idle waiting rather than useful work. The end result is that the system feels like a batch relay tool instead of a live collaborative console. The recent session-binding work improved the quality of the content Duet relays once a handoff happens, but it did not change how Duet decides that a response is ready to relay.
 
-The deeper problem is that the design is based on screen sampling rather than event observation. Duet is trying to infer "done speaking" by periodically checking whether the rendered terminal content changed. That is inherently coarse and introduces avoidable latency. It also makes the timing behavior fragile: short pauses can trigger premature stabilization, and longer rendering churn can delay relay even after the meaningful answer is already visible.
+The deeper problem is that the design is based on screen sampling rather than event observation. Duet is trying to infer "done speaking" by periodically checking whether the rendered terminal content changed. That is inherently coarse and introduces avoidable latency. It also makes the timing behavior fragile: short pauses can trigger premature stabilization, and longer rendering churn can delay relay even after the meaningful answer is already visible. There is now also an 8-second auto-relay cooldown for loop prevention, which is reasonable as a guardrail but reinforces that the communication path is still shaped by coarse timers rather than by explicit output events.
 
 ### Suggested remedy
 

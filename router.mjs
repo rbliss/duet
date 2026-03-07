@@ -1,6 +1,6 @@
 import { createInterface } from 'readline';
 import { execSync } from 'child_process';
-import { writeFileSync, unlinkSync, readFileSync, existsSync, statSync, openSync, readSync, closeSync, rmSync } from 'fs';
+import { writeFileSync, unlinkSync, readFileSync, existsSync, statSync, openSync, readSync, closeSync, rmSync, watch } from 'fs';
 import { join } from 'path';
 
 const SESSION = process.env.DUET_SESSION || 'duet';
@@ -85,8 +85,11 @@ export function focusPane(pane) {
 //     session storage while reusing auth/config (read-only). Process-level if
 //     CODEX_HOME works; degrades to workspace-level if it doesn't.
 //     Only read-only config is shared — mutable SQLite state is NOT symlinked.
-// Both bindings are published in STATE_DIR/bindings.json after confirmation.
-// The router reads that manifest once and never scans global session history.
+//
+// Binding is an eventually-consistent runtime property. bind-sessions.sh runs
+// as a background reconciler that keeps polling and incrementally updates
+// bindings.json. The router re-reads the manifest while any tool is pending
+// and upgrades transport when status flips to "bound" or "degraded".
 //
 // The STATE_DIR lifetime is tied to the Duet session (not the bootstrap shell).
 // It persists until /quit cleans it up or a new Duet session replaces it.
@@ -98,10 +101,10 @@ export function focusPane(pane) {
 //   - Read cost is proportional to new output, not total file size
 //   - No risk of a fixed tail window cutting into a long response
 
-// relayMode tracks durable binding state per tool (set once by resolveBindings):
-//   'pending'  — binding not yet resolved
+// relayMode tracks durable binding state per tool:
+//   'pending'  — binder is still looking for session file
 //   'session'  — authoritative session binding exists
-//   'pane'     — no session binding available
+//   'pane'     — binding degraded or unavailable
 // This is never downgraded by transient relay fallbacks.
 // Per-relay transport ('session' or 'pane') is returned by getCleanResponse().
 //
@@ -113,11 +116,28 @@ export const sessionState = {
   codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null },
 };
 
+// ─── Binding resolution ─────────────────────────────────────────────────────
+//
+// The router is a pure manifest consumer. bind-sessions.sh owns discovery and
+// writes bindings.json with status transitions:
+//   pending  → tool launched, session file not yet found
+//   bound    → session file discovered, path confirmed
+//   degraded → binding deadline expired, file never appeared
+//
+// The router re-reads the manifest while any tool is still "pending" and
+// upgrades transport (pane → session file watcher) when status flips to "bound".
+
 // Cache for the parsed bindings.json manifest
 let bindingsCache = null;
 
 function loadBindings() {
-  if (bindingsCache !== null) return bindingsCache;
+  if (bindingsCache !== null) {
+    // Re-read if any tool is still pending (binder may have updated it)
+    const hasPending = ['claude', 'codex'].some(t =>
+      bindingsCache[t]?.status === 'pending');
+    if (!hasPending) return bindingsCache;
+    bindingsCache = null;
+  }
   if (!STATE_DIR) return null;
   const manifestPath = join(STATE_DIR, 'bindings.json');
   try {
@@ -146,11 +166,17 @@ export function resolveSessionPath(tool) {
       st.bindingLevel = b.level || null;
       return st.path;
     }
-    // Manifest loaded but tool is unbound — final state, no retry
-    st.relayMode = 'pane';
+    if (b.status === 'degraded') {
+      // Binder gave up — terminal state
+      st.resolved = true;
+      st.relayMode = 'pane';
+      return null;
+    }
+    // status === 'pending' — binder is still looking
+    st.relayMode = 'pending';
     return null;
   }
-  // Manifest not yet written — genuinely pending
+  // No manifest yet — genuinely pending
   st.relayMode = 'pending';
   return null;
 }
@@ -158,10 +184,12 @@ export function resolveSessionPath(tool) {
 function readIncremental(tool) {
   const st = sessionState[tool];
   const filePath = resolveSessionPath(tool);
-  if (!filePath) return;
+  if (!filePath) return { hasNew: false, complete: false };
+  let hasNew = false;
+  let complete = false;
   try {
     const { size } = statSync(filePath);
-    if (size <= st.offset) return; // no new data
+    if (size <= st.offset) return { hasNew: false, complete: false };
     const fd = openSync(filePath, 'r');
     try {
       const len = size - st.offset;
@@ -170,7 +198,7 @@ function readIncremental(tool) {
       const chunk = buf.toString('utf8');
       // Only process complete lines; save any trailing partial line for next read
       const lastNl = chunk.lastIndexOf('\n');
-      if (lastNl < 0) return; // no complete line yet
+      if (lastNl < 0) return { hasNew: false, complete: false };
       const completeText = chunk.slice(0, lastNl);
       st.offset += lastNl + 1; // advance past the newline
       // Parse lines and update cached response
@@ -182,13 +210,15 @@ function readIncremental(tool) {
           const extracted = tool === 'claude'
             ? extractClaudeResponse(obj)
             : extractCodexResponse(obj);
-          if (extracted) st.lastResponse = extracted;
+          if (extracted) { st.lastResponse = extracted; hasNew = true; }
+          if (isResponseComplete(tool, obj)) complete = true;
         } catch {}
       }
     } finally {
       closeSync(fd);
     }
   } catch {}
+  return { hasNew, complete };
 }
 
 export function extractClaudeResponse(obj) {
@@ -216,6 +246,19 @@ export function extractCodexResponse(obj) {
   return null;
 }
 
+// Detect JSONL entries that signal the tool has finished its response.
+// Used by file watchers to trigger immediate relay instead of waiting for debounce.
+export function isResponseComplete(tool, obj) {
+  if (tool === 'claude') {
+    if (obj.type === 'result') return true;
+    if (obj.message?.role === 'assistant' && obj.message?.stop_reason === 'end_turn') return true;
+  }
+  if (tool === 'codex') {
+    if (obj.payload?.type === 'task_complete') return true;
+  }
+  return false;
+}
+
 export function getClaudeLastResponse() {
   readIncremental('claude');
   return sessionState.claude.lastResponse;
@@ -239,18 +282,29 @@ export function getNewContent(baseline, current) {
   const baseLines = baseline.split('\n');
   const currLines = current.split('\n');
 
-  // Try to find where old content ends in the new capture.
-  // Match the last few non-empty lines of baseline in current.
-  const baseTail = baseLines.filter(l => l.trim()).slice(-4);
-  if (baseTail.length === 0) return current;
-
-  const tailStr = baseTail.join('\n');
-  const idx = current.lastIndexOf(tailStr);
-  if (idx >= 0) {
-    return current.slice(idx + tailStr.length).trim();
+  // Prefix/suffix matching: find shared header and footer between captures.
+  // New content is the inserted middle region. This handles TUIs (like Claude
+  // Code) that insert assistant output above a preserved prompt/footer block.
+  let prefixLen = 0;
+  const maxPrefix = Math.min(baseLines.length, currLines.length);
+  while (prefixLen < maxPrefix && baseLines[prefixLen] === currLines[prefixLen]) {
+    prefixLen++;
   }
 
-  // If screen scrolled past overlap, compute line-level diff
+  let suffixLen = 0;
+  const maxSuffix = Math.min(baseLines.length - prefixLen, currLines.length - prefixLen);
+  while (suffixLen < maxSuffix &&
+         baseLines[baseLines.length - 1 - suffixLen] === currLines[currLines.length - 1 - suffixLen]) {
+    suffixLen++;
+  }
+
+  if (prefixLen > 0 || suffixLen > 0) {
+    const inserted = currLines.slice(prefixLen, currLines.length - suffixLen);
+    const result = inserted.filter(l => l.trim()).join('\n').trim();
+    if (result) return result;
+  }
+
+  // Fallback: line-level set diff for complete screen replacement / scroll
   const baseSet = new Set(baseLines.map(l => l.trim()).filter(Boolean));
   const newLines = currLines.filter(l => l.trim() && !baseSet.has(l.trim()));
   return newLines.join('\n');
@@ -295,10 +349,21 @@ export function cleanCapture(text) {
 }
 
 // ─── Watch / converse state ──────────────────────────────────────────────────
+//
+// Two relay paths, selected per-tool based on session binding:
+//   1. Session-bound: fs.watch() on the session log file. On new JSONL content,
+//      debounce briefly (200ms if completion signal detected, 800ms otherwise).
+//      Latency: <1s vs the old ~6s.
+//   2. Pane-only: poll tmux capture-pane at 1s intervals, 2 stable ticks (~2s).
+//      Latency: ~2s vs the old ~6s.
+// Tools that start as 'pending' are polled via pane and auto-upgraded to file
+// watching once their binding resolves.
 
-const POLL_MS = 2000;
-const STABLE_TICKS = 3;        // 3 unchanged polls (~6s) = output is done
-const RELAY_COOLDOWN_MS = 8000; // prevent rapid-fire auto-relays
+const PANE_POLL_MS = 1000;
+const PANE_STABLE_TICKS = 2;        // 2 unchanged polls (~2s) = pane output done
+const SESSION_DEBOUNCE_MS = 800;    // debounce after session log change
+const SESSION_COMPLETE_MS = 200;    // shorter debounce when completion signal detected
+const RELAY_COOLDOWN_MS = 8000;     // prevent rapid-fire auto-relays (watch mode only)
 
 let rl = null; // set when running as main
 let watchInterval = null;
@@ -310,34 +375,125 @@ const watchState = {
   codex:  { baseline: '', lastSeen: '', unchangedCount: 0 },
 };
 
+// File watcher state (session-bound tools use fs.watch for event-driven relay)
+const fileWatchers = {};
+const fileDebounceTimers = {};
+let panePolledTools = new Set();
+
 export function isWatching() { return watchInterval !== null; }
 
 function prompt() { if (rl) rl.prompt(); }
 
+// ─── File watcher functions (session-bound event-driven relay) ───────────────
+
+function startFileWatcher(tool) {
+  const filePath = sessionState[tool].path;
+  if (!filePath || fileWatchers[tool]) return false;
+  try {
+    fileWatchers[tool] = watch(filePath, (eventType) => {
+      if (eventType === 'change') onFileChange(tool);
+    });
+    fileWatchers[tool].on('error', () => {
+      stopFileWatcher(tool);
+      panePolledTools.add(tool);
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function stopFileWatcher(tool) {
+  if (fileWatchers[tool]) {
+    fileWatchers[tool].close();
+    delete fileWatchers[tool];
+  }
+  if (fileDebounceTimers[tool]) {
+    clearTimeout(fileDebounceTimers[tool]);
+    delete fileDebounceTimers[tool];
+  }
+}
+
+function stopFileWatchers() {
+  for (const tool of Object.keys(fileWatchers)) stopFileWatcher(tool);
+}
+
+function onFileChange(tool) {
+  if (!watchInterval) return; // not in watch/converse mode
+  const { hasNew, complete } = readIncremental(tool);
+  if (!hasNew) return;
+  if (fileDebounceTimers[tool]) clearTimeout(fileDebounceTimers[tool]);
+  const delay = complete ? SESSION_COMPLETE_MS : SESSION_DEBOUNCE_MS;
+  fileDebounceTimers[tool] = setTimeout(() => triggerSessionRelay(tool), delay);
+}
+
+function triggerSessionRelay(tool) {
+  const st = sessionState[tool];
+  if (!st.lastResponse) return;
+  handleNewOutput(tool, st.lastResponse);
+  // Sync pane baseline to prevent duplicate relay on fallback to pane polling
+  if (PANES[tool]) {
+    try {
+      const cap = capturePane(PANES[tool], 80).trim();
+      watchState[tool] = { baseline: cap, lastSeen: cap, unchangedCount: 0 };
+    } catch {}
+  }
+}
+
+// ─── Polling start / stop ────────────────────────────────────────────────────
+
 function startPolling() {
   if (watchInterval) return;
+  panePolledTools = new Set();
   for (const name of ['claude', 'codex']) {
+    resolveSessionPath(name);
+    const st = sessionState[name];
+    if (st.relayMode === 'session' && st.path && startFileWatcher(name)) {
+      // event-driven relay via session log
+    } else {
+      panePolledTools.add(name);
+    }
+  }
+  for (const name of panePolledTools) {
     const cap = capturePane(PANES[name], 80).trim();
     watchState[name] = { baseline: cap, lastSeen: cap, unchangedCount: 0 };
   }
-  watchInterval = setInterval(pollPanes, POLL_MS);
+  watchInterval = setInterval(pollPanes, PANE_POLL_MS);
 }
 
 function stopPolling() {
   if (watchInterval) clearInterval(watchInterval);
   watchInterval = null;
   converseState = null;
+  stopFileWatchers();
+  panePolledTools = new Set();
 }
 
 function pollPanes() {
-  for (const name of ['claude', 'codex']) {
+  // Dynamic upgrade: check if any pending tools have resolved to session-bound
+  for (const name of [...panePolledTools]) {
+    if (sessionState[name].relayMode === 'pending') {
+      resolveSessionPath(name);
+      if (sessionState[name].relayMode === 'session' && sessionState[name].path) {
+        if (startFileWatcher(name)) {
+          panePolledTools.delete(name);
+          console.log(`\n${C.green}${name}: upgraded to session log watcher${C.reset}`);
+          prompt();
+        }
+      } else if (sessionState[name].relayMode === 'pane') {
+        console.log(`\n${C.yellow}${name}: binding timed out — using pane relay${C.reset}`);
+        prompt();
+      }
+    }
+  }
+  for (const name of panePolledTools) {
     const state = watchState[name];
     const current = capturePane(PANES[name], 80).trim();
 
     if (current === state.lastSeen) {
       state.unchangedCount++;
 
-      if (state.unchangedCount === STABLE_TICKS && current !== state.baseline) {
+      if (state.unchangedCount === PANE_STABLE_TICKS && current !== state.baseline) {
         const newContent = getNewContent(state.baseline, current);
         state.baseline = current;
         state.unchangedCount = 0;
@@ -366,24 +522,7 @@ function handleNewOutput(source, newContent) {
   const other = source === 'claude' ? 'codex' : 'claude';
   const now = Date.now();
 
-  // Cooldown: don't auto-relay too fast from the same event
-  if (now - lastAutoRelayTime < RELAY_COOLDOWN_MS) return;
-
-  // --- @mention detection (use pane content for detection, logs for relay) ---
-  const mentions = detectMentions(newContent);
-  const mentionsOther = mentions.includes(other);
-
-  if (mentionsOther && !converseState) {
-    lastAutoRelayTime = now;
-    const { text: response, via } = getCleanResponse(source, newContent);
-    console.log(`\n${C.blue}[auto|${via}] ${source} mentioned @${other} — relaying${C.reset}`);
-    const msg = `${source} says:\n${response}`;
-    pasteToPane(PANES[other], msg);
-    prompt();
-    return;
-  }
-
-  // --- Converse mode auto-relay ---
+  // --- Converse mode auto-relay (turn tracking prevents loops — no cooldown) ---
   if (converseState && converseState.turn === source) {
     converseState.rounds++;
     if (converseState.rounds > converseState.maxRounds) {
@@ -399,6 +538,22 @@ function handleNewOutput(source, newContent) {
     const msg = `${source} says (round ${converseState.rounds} on "${converseState.topic}"):\n${response}`;
     pasteToPane(PANES[other], msg);
     converseState.turn = other;
+    prompt();
+    return;
+  }
+
+  // --- @mention detection (with cooldown to prevent loops) ---
+  if (now - lastAutoRelayTime < RELAY_COOLDOWN_MS) return;
+
+  const mentions = detectMentions(newContent);
+  const mentionsOther = mentions.includes(other);
+
+  if (mentionsOther) {
+    lastAutoRelayTime = now;
+    const { text: response, via } = getCleanResponse(source, newContent);
+    console.log(`\n${C.blue}[auto|${via}] ${source} mentioned @${other} — relaying${C.reset}`);
+    const msg = `${source} says:\n${response}`;
+    pasteToPane(PANES[other], msg);
     prompt();
   }
 }
@@ -531,7 +686,8 @@ function handleInput(input) {
         const color = tool === 'claude' ? C.magenta : C.green;
         const pad = tool === 'claude' ? '' : ' ';
         const level = st.bindingLevel ? ` (${st.bindingLevel})` : '';
-        console.log(`  ${color}${tool}${C.reset}${pad} relay: ${modeColor(st.relayMode)}${st.relayMode}${level}${C.reset}`);
+        const transport = fileWatchers[tool] ? ', event-driven' : panePolledTools.has(tool) ? ', polling' : '';
+        console.log(`  ${color}${tool}${C.reset}${pad} relay: ${modeColor(st.relayMode)}${st.relayMode}${level}${transport}${C.reset}`);
       }
       return;
     }
@@ -620,22 +776,22 @@ if (isMain) {
 
   printBanner();
 
-  // Resolve session bindings and report status
+  // Auto-start watching for @mentions (also sets up file watchers for session-bound tools)
+  startPolling();
+
+  // Report relay status
   for (const tool of ['claude', 'codex']) {
-    resolveSessionPath(tool);
     const st = sessionState[tool];
     if (st.relayMode === 'session') {
       const level = st.bindingLevel ? ` [${st.bindingLevel}]` : '';
-      console.log(`${C.green}${tool}: session-bound relay active${level}${C.reset}`);
+      const transport = fileWatchers[tool] ? ' (event-driven)' : '';
+      console.log(`${C.green}${tool}: session-bound relay active${level}${transport}${C.reset}`);
     } else if (st.relayMode === 'pending') {
-      console.log(`${C.yellow}${tool}: binding manifest not yet available${C.reset}`);
+      console.log(`${C.yellow}${tool}: binding pending — will upgrade when available${C.reset}`);
     } else {
       console.log(`${C.yellow}${tool}: pane-capture relay (binding failed)${C.reset}`);
     }
   }
-
-  // Auto-start watching for @mentions
-  startPolling();
   console.log(`${C.cyan}Watching for @mentions — tools can talk to each other${C.reset}\n`);
 
   rl.prompt();
