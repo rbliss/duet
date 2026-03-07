@@ -141,7 +141,7 @@ Both CLIs run as full interactive processes in their own pseudo-terminals. Duet 
 cd ~/duet && node --test test.mjs
 ```
 
-105 tests across 11 suites: shell escaping, input parsing (including converse/watch/stop), content diffing (`getNewContent`), @mention detection (`detectMentions`), tmux integration (sendKeys, capturePane, pasteToPane, focusPane, cross-pane relay), launcher layout, response extraction (Claude and Codex formats), incremental session reader, and edge cases. Integration tests run against real tmux sessions.
+111 tests across 17 suites: shell escaping, input parsing (including converse/watch/stop), content diffing (`getNewContent`), @mention detection (`detectMentions`), tmux integration (sendKeys, capturePane, pasteToPane, focusPane, cross-pane relay), launcher layout, response extraction (Claude and Codex formats), incremental session reader, end-to-end session binding, and edge cases. Integration tests run against real tmux sessions.
 
 ## Known limitations
 
