@@ -70,7 +70,9 @@ mkdir -p "$STATE_DIR"
 #   Guarantee: process-level (UUID is unique to this exact launch).
 # Codex: launched with CODEX_HOME pointing to a run-scoped overlay directory.
 #   Guarantee: process-level (isolated session store — only our Codex writes there).
-#   Auth/config symlinked from ~/.codex; sessions dir is private to this run.
+#   Only read-only config/auth are shared; mutable state stores are NOT symlinked.
+#   Note: CODEX_HOME is recognized by Codex but may not be an officially supported
+#   configuration surface. If it stops working, Codex binding degrades to workspace-level.
 CLAUDE_SESSION_ID=$(uuidgen)
 export CLAUDE_SESSION_ID
 export CLAUDE_PROJECTS="$HOME/.claude/projects"
@@ -78,14 +80,16 @@ export STATE_DIR
 export WORKDIR
 
 # --- Codex session-store isolation ---
-# Create a run-scoped CODEX_HOME that shares auth/config but isolates session storage.
-# This gives exact process-level ownership: the only .jsonl in this sessions dir is ours.
+# Create a run-scoped CODEX_HOME that reuses the logged-in account (auth.json, config.toml)
+# but isolates mutable session storage. We do NOT symlink mutable SQLite state stores
+# (state_5.sqlite etc.) — that would blur isolation and risk locking/corruption.
 CODEX_OVERLAY="$STATE_DIR/codex-home"
 mkdir -p "$CODEX_OVERLAY/sessions"
-for f in auth.json config.toml state_5.sqlite models_cache.json version.json; do
+# Only share read-only config files — never mutable state stores
+for f in auth.json config.toml version.json; do
   [ -f "$HOME/.codex/$f" ] && ln -sf "$HOME/.codex/$f" "$CODEX_OVERLAY/$f"
 done
-# Symlink non-session dirs that Codex may need
+# Symlink read-only dirs that Codex may need
 for d in rules skills; do
   [ -d "$HOME/.codex/$d" ] && ln -sf "$HOME/.codex/$d" "$CODEX_OVERLAY/$d"
 done

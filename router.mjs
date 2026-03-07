@@ -78,11 +78,13 @@ export function focusPane(pane) {
 
 // ─── Session log readers (clean text from tool logs) ─────────────────────────
 //
-// Session ownership is exact by construction:
+// Session ownership model:
 //   - Claude: launcher generates a UUID, passes --session-id, polls until the
-//     exact UUID-named .jsonl appears on disk.
-//   - Codex: launcher sets CODEX_HOME to a run-scoped overlay directory so
-//     session storage is isolated. The only .jsonl in that dir is ours.
+//     exact UUID-named .jsonl appears on disk. Process-level ownership.
+//   - Codex: launcher sets CODEX_HOME to a run-scoped overlay that isolates
+//     session storage while reusing auth/config (read-only). Process-level if
+//     CODEX_HOME works; degrades to workspace-level if it doesn't.
+//     Only read-only config is shared — mutable SQLite state is NOT symlinked.
 // Both bindings are published in STATE_DIR/bindings.json after confirmation.
 // The router reads that manifest once and never scans global session history.
 //
