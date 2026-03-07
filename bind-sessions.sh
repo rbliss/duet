@@ -14,6 +14,10 @@
 #   WORKDIR            - working directory for Codex cwd fallback matching
 #   BIND_TIMEOUT       - max poll iterations (default 240 = 120s at 0.5s each)
 #
+# Optional (resume fast-path):
+#   RESUME_CLAUDE_PATH - stored Claude session path to verify
+#   RESUME_CODEX_PATH  - stored Codex session path to verify
+#
 # Codex binding strategy:
 #   1. Primary: look in the isolated CODEX_SESSIONS dir (process-level ownership).
 #   2. Fallback: if CODEX_HOME isolation produced nothing, scan ~/.codex/sessions/
@@ -34,9 +38,11 @@ set -e
 claude_status="pending"
 claude_path=""
 claude_level=""
+claude_session_id_val=""
 codex_status="pending"
 codex_path=""
 codex_level=""
+codex_session_id_val=""
 
 write_manifest() {
   local now
@@ -49,29 +55,75 @@ bindings = {
         'level': sys.argv[2] or None,
         'status': sys.argv[3],
         'confirmedAt': sys.argv[5] if sys.argv[3] == 'bound' else None,
+        'session_id': sys.argv[8] or None,
     },
     'codex': {
         'path': sys.argv[4] or None,
         'level': sys.argv[6] or None,
         'status': sys.argv[7],
         'confirmedAt': sys.argv[5] if sys.argv[7] == 'bound' else None,
+        'session_id': sys.argv[9] or None,
     },
 }
 json.dump(bindings, sys.stdout, indent=2)
 " "$claude_path" "$claude_level" "$claude_status" "$codex_path" "$now" "$codex_level" "$codex_status" \
+  "$claude_session_id_val" "$codex_session_id_val" \
     > "$STATE_DIR/bindings.json"
 }
 
-# Write initial pending manifest so the router sees "pending" immediately
+# Extract Codex session ID from a session file's first line
+extract_codex_session_id() {
+  head -1 "$1" 2>/dev/null | python3 -c "
+import sys,json
+try:
+    d = json.load(sys.stdin)
+    print(d.get('payload',{}).get('id',''))
+except:
+    print('')
+" 2>/dev/null
+}
+
+# --- Resume fast-path: verify stored session paths ---
+# Only accepts a stored path if:
+#   - Claude: filename matches $CLAUDE_SESSION_ID (prevents wrong-transcript binding)
+#   - Codex: extracted payload.id matches $RESUME_CODEX_SESSION_ID if set
+CLAUDE_BOUND=false
+CODEX_BOUND=false
+
+if [ -n "${RESUME_CLAUDE_PATH:-}" ] && [ -f "$RESUME_CLAUDE_PATH" ]; then
+  RESUME_CLAUDE_BASENAME=$(basename "$RESUME_CLAUDE_PATH" .jsonl)
+  if [ "$RESUME_CLAUDE_BASENAME" = "$CLAUDE_SESSION_ID" ]; then
+    CLAUDE_BOUND=true
+    claude_status="bound"
+    claude_path="$RESUME_CLAUDE_PATH"
+    claude_level="process"
+    claude_session_id_val="$CLAUDE_SESSION_ID"
+  fi
+fi
+
+if [ -n "${RESUME_CODEX_PATH:-}" ] && [ -f "$RESUME_CODEX_PATH" ]; then
+  _extracted_id=$(extract_codex_session_id "$RESUME_CODEX_PATH")
+  if [ -z "${RESUME_CODEX_SESSION_ID:-}" ] || [ "$_extracted_id" = "$RESUME_CODEX_SESSION_ID" ]; then
+    CODEX_BOUND=true
+    codex_status="bound"
+    codex_path="$RESUME_CODEX_PATH"
+    codex_level="process"
+    codex_session_id_val="$_extracted_id"
+  fi
+fi
+
+# Write initial manifest (pending or pre-verified bound)
 write_manifest
+
+# If both already verified from resume, we're done
+if [ "$CLAUDE_BOUND" = true ] && [ "$CODEX_BOUND" = true ]; then
+  exit 0
+fi
 
 # Snapshot global Codex sessions before launch (for fallback cwd matching)
 find "$GLOBAL_CODEX_SESSIONS" -name '*.jsonl' -type f 2>/dev/null | sort > "$STATE_DIR/codex-before.list"
 
 # Poll for both session files (check every 0.5s, up to BIND_TIMEOUT iterations)
-CLAUDE_BOUND=false
-CODEX_BOUND=false
-
 for i in $(seq 1 "$BIND_TIMEOUT"); do
   sleep 0.5
   # Claude: find our UUID file anywhere in the projects tree
@@ -82,6 +134,7 @@ for i in $(seq 1 "$BIND_TIMEOUT"); do
       claude_status="bound"
       claude_path="$CLAUDE_SESSION_FILE"
       claude_level="process"
+      claude_session_id_val="$CLAUDE_SESSION_ID"
       write_manifest
     fi
   fi
@@ -93,6 +146,7 @@ for i in $(seq 1 "$BIND_TIMEOUT"); do
       codex_status="bound"
       codex_path="$CODEX_SESSION_FILE"
       codex_level="process"
+      codex_session_id_val=$(extract_codex_session_id "$CODEX_SESSION_FILE")
       write_manifest
     fi
   fi
@@ -112,6 +166,7 @@ if [ "$CODEX_BOUND" = false ]; then
       CODEX_BOUND=true
       codex_status="bound"
       codex_level="workspace"
+      codex_session_id_val=$(extract_codex_session_id "$candidate")
       write_manifest
       break
     fi

@@ -1,4 +1,4 @@
-# Resume Plan
+# COMPLETED — Resume Plan
 
 ## Goal
 

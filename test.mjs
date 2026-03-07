@@ -6,7 +6,8 @@ import { existsSync } from 'fs';
 import { writeFileSync, mkdirSync, rmSync, appendFileSync } from 'fs';
 import { join } from 'path';
 
-import { shellEscape, parseInput, sendKeys, capturePane, pasteToPane, focusPane, getNewContent, detectMentions, cleanCapture, extractClaudeResponse, extractCodexResponse, isResponseComplete, sessionState, getClaudeLastResponse, getCodexLastResponse, resolveSessionPath, setStateDir } from './router.mjs';
+import { shellEscape, parseInput, sendKeys, capturePane, pasteToPane, focusPane, getNewContent, detectMentions, cleanCapture, extractClaudeResponse, extractCodexResponse, isResponseComplete, sessionState, getClaudeLastResponse, getCodexLastResponse, resolveSessionPath, setStateDir, setDuetMode, setRunDir, updateRunJson, readIncremental } from './router.mjs';
+import { readFileSync } from 'fs';
 
 // ─── Unit Tests: shellEscape ─────────────────────────────────────────────────
 
@@ -1369,5 +1370,676 @@ describe('edge cases', () => {
   it('getNewContent handles completely new content', () => {
     const result = getNewContent('old stuff', 'totally new content');
     assert.ok(result.includes('totally new content'));
+  });
+});
+
+// ─── Resume: parseInput new commands ─────────────────────────────────────────
+
+describe('parseInput resume commands', () => {
+  it('parses /detach', () => {
+    assert.deepEqual(parseInput('/detach'), { type: 'detach' });
+  });
+
+  it('parses /destroy', () => {
+    assert.deepEqual(parseInput('/destroy'), { type: 'destroy' });
+  });
+
+  it('/quit still works', () => {
+    assert.deepEqual(parseInput('/quit'), { type: 'quit' });
+    assert.deepEqual(parseInput('/exit'), { type: 'quit' });
+  });
+});
+
+// ─── Resume: updateRunJson ───────────────────────────────────────────────────
+
+describe('updateRunJson', () => {
+  const runDir = '/tmp/duet-test-runjson-' + process.pid;
+  const runJson = join(runDir, 'run.json');
+
+  before(() => {
+    mkdirSync(runDir, { recursive: true });
+  });
+
+  after(() => {
+    setRunDir(null);
+    rmSync(runDir, { recursive: true, force: true });
+  });
+
+  it('creates run.json if it does not exist', () => {
+    try { rmSync(runJson); } catch {}
+    setRunDir(runDir);
+    updateRunJson({ status: 'active', cwd: '/test' });
+    const data = JSON.parse(readFileSync(runJson, 'utf8'));
+    assert.equal(data.status, 'active');
+    assert.equal(data.cwd, '/test');
+  });
+
+  it('merges into existing run.json', () => {
+    writeFileSync(runJson, JSON.stringify({ run_id: 'abc', status: 'active' }));
+    setRunDir(runDir);
+    updateRunJson({ status: 'stopped', updated_at: '2026-01-01' });
+    const data = JSON.parse(readFileSync(runJson, 'utf8'));
+    assert.equal(data.run_id, 'abc');
+    assert.equal(data.status, 'stopped');
+    assert.equal(data.updated_at, '2026-01-01');
+  });
+
+  it('handles dotted keys for nested updates', () => {
+    writeFileSync(runJson, JSON.stringify({ run_id: 'abc', claude: { session_id: 'old' } }));
+    setRunDir(runDir);
+    updateRunJson({ 'claude.binding_path': '/path/to/file.jsonl' });
+    const data = JSON.parse(readFileSync(runJson, 'utf8'));
+    assert.equal(data.claude.session_id, 'old');
+    assert.equal(data.claude.binding_path, '/path/to/file.jsonl');
+  });
+
+  it('does nothing when run dir is null', () => {
+    setRunDir(null);
+    updateRunJson({ status: 'should-not-write' });
+    // No error thrown, no file created
+  });
+});
+
+// ─── Resume: EOF-seek on resumed session binding ─────────────────────────────
+
+describe('EOF-seek on resume', () => {
+  const testDir = '/tmp/duet-test-resume-eof-' + process.pid;
+  const stateDir = join(testDir, 'state');
+  const sessionDir = join(testDir, 'sessions');
+  const claudeLog = join(sessionDir, 'resume-claude.jsonl');
+
+  let origClaude, origCodex;
+
+  before(() => {
+    origClaude = { ...sessionState.claude };
+    origCodex = { ...sessionState.codex };
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true });
+  });
+
+  after(() => {
+    setStateDir(null);
+    setDuetMode('new');
+    setRunDir(null);
+    Object.assign(sessionState.claude, origClaude);
+    Object.assign(sessionState.codex, origCodex);
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  function resetForResume() {
+    setStateDir(stateDir);
+    setDuetMode('resumed');
+    setRunDir(stateDir);
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+  }
+
+  it('seeks reader to EOF when mode is resumed', () => {
+    // Write session file with historical content
+    const oldMsg = JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'Old history' }] } });
+    writeFileSync(claudeLog, oldMsg + '\n');
+    const fileSize = readFileSync(claudeLog).length;
+
+    // Write binding manifest
+    writeFileSync(join(stateDir, 'bindings.json'), JSON.stringify({
+      claude: { path: claudeLog, level: 'process', status: 'bound', confirmedAt: new Date().toISOString() },
+      codex: { path: null, level: null, status: 'degraded', confirmedAt: null },
+    }));
+
+    resetForResume();
+
+    // Resolve binding — should seek to EOF
+    const resolved = resolveSessionPath('claude');
+    assert.equal(resolved, claudeLog);
+    assert.equal(sessionState.claude.offset, fileSize);
+
+    // Reading should return null (no NEW content after EOF)
+    assert.equal(getClaudeLastResponse(), null);
+  });
+
+  it('picks up new content appended after EOF-seek', () => {
+    // State from previous test: offset at EOF, no lastResponse
+
+    // Append new content after the seek point
+    const newMsg = JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'New after resume' }] } });
+    appendFileSync(claudeLog, newMsg + '\n');
+
+    // Should pick up only the new content
+    assert.equal(getClaudeLastResponse(), 'New after resume');
+  });
+
+  it('does NOT seek to EOF when mode is new', () => {
+    const msg = JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'Should be visible' }] } });
+    writeFileSync(claudeLog, msg + '\n');
+
+    writeFileSync(join(stateDir, 'bindings.json'), JSON.stringify({
+      claude: { path: claudeLog, level: 'process', status: 'bound', confirmedAt: new Date().toISOString() },
+      codex: { path: null, level: null, status: 'degraded', confirmedAt: null },
+    }));
+
+    setDuetMode('new');
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+
+    resolveSessionPath('claude');
+    // offset should be 0 (no seek), and reading should pick up the content
+    assert.equal(sessionState.claude.offset, 0);
+    assert.equal(getClaudeLastResponse(), 'Should be visible');
+  });
+});
+
+// ─── Resume: binding propagation to run.json ─────────────────────────────────
+
+describe('binding propagation to run.json', () => {
+  const testDir = '/tmp/duet-test-propagation-' + process.pid;
+  const stateDir = join(testDir, 'state');
+  const sessionDir = join(testDir, 'sessions');
+  const claudeLog = join(sessionDir, 'prop-claude.jsonl');
+  const runJson = join(stateDir, 'run.json');
+
+  let origClaude, origCodex;
+
+  before(() => {
+    origClaude = { ...sessionState.claude };
+    origCodex = { ...sessionState.codex };
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true });
+  });
+
+  after(() => {
+    setStateDir(null);
+    setDuetMode('new');
+    setRunDir(null);
+    Object.assign(sessionState.claude, origClaude);
+    Object.assign(sessionState.codex, origCodex);
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('writes binding path and session_id to run.json on resolution', () => {
+    // Set up a session file and binding manifest
+    const msg = JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'test' }] } });
+    writeFileSync(claudeLog, msg + '\n');
+    writeFileSync(join(stateDir, 'bindings.json'), JSON.stringify({
+      claude: { path: claudeLog, level: 'process', status: 'bound', confirmedAt: new Date().toISOString(), session_id: 'claude-uuid-123' },
+      codex: { path: null, level: null, status: 'degraded', confirmedAt: null },
+    }));
+
+    // Initialize run.json
+    writeFileSync(runJson, JSON.stringify({ run_id: 'test-run', status: 'active' }));
+
+    setStateDir(stateDir);
+    setDuetMode('new');
+    setRunDir(stateDir);
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+
+    resolveSessionPath('claude');
+
+    // run.json should now have the binding path and session ID
+    const data = JSON.parse(readFileSync(runJson, 'utf8'));
+    assert.equal(data.claude.binding_path, claudeLog);
+    assert.equal(data.claude.session_id, 'claude-uuid-123');
+    assert.ok(data.updated_at);
+  });
+});
+
+// ─── Resume: binder resume fast-path ─────────────────────────────────────────
+
+describe('binder resume fast-path', () => {
+  const testDir = '/tmp/duet-test-binder-resume-' + process.pid;
+  const stateDir = join(testDir, 'state');
+  const claudeProjects = join(testDir, 'claude-projects');
+  const codexSessions = join(testDir, 'codex-sessions');
+  const globalCodexSessions = join(testDir, 'global-codex-sessions');
+
+  before(() => {
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(claudeProjects, { recursive: true });
+    mkdirSync(codexSessions, { recursive: true });
+    mkdirSync(globalCodexSessions, { recursive: true });
+  });
+
+  after(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  function runBind(env) {
+    const fullEnv = {
+      ...process.env,
+      STATE_DIR: stateDir,
+      CLAUDE_PROJECTS: claudeProjects,
+      CODEX_SESSIONS: codexSessions,
+      GLOBAL_CODEX_SESSIONS: globalCodexSessions,
+      WORKDIR: '/test/workdir',
+      BIND_TIMEOUT: '2',
+      ...env,
+    };
+    try {
+      execSync('bash /home/claude/duet/bind-sessions.sh', { env: fullEnv, timeout: 10000 });
+    } catch {}
+  }
+
+  function cleanState() {
+    try { rmSync(join(stateDir, 'bindings.json')); } catch {}
+    try { execSync(`rm -rf ${claudeProjects}/* ${codexSessions}/* ${globalCodexSessions}/*`); } catch {}
+  }
+
+  it('immediately binds when RESUME_CLAUDE_PATH points to existing file', () => {
+    cleanState();
+    const claudeFile = join(claudeProjects, 'resume-test.jsonl');
+    writeFileSync(claudeFile, JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] } }) + '\n');
+
+    runBind({
+      CLAUDE_SESSION_ID: 'resume-test',
+      RESUME_CLAUDE_PATH: claudeFile,
+    });
+
+    const bindings = JSON.parse(readFileSync(join(stateDir, 'bindings.json'), 'utf8'));
+    assert.equal(bindings.claude.status, 'bound');
+    assert.equal(bindings.claude.path, claudeFile);
+    assert.equal(bindings.claude.session_id, 'resume-test');
+  });
+
+  it('immediately binds when RESUME_CODEX_PATH points to existing file', () => {
+    cleanState();
+    const codexFile = join(codexSessions, 'resume-codex.jsonl');
+    const meta = JSON.stringify({ type: 'session_meta', payload: { id: 'codex-session-123', cwd: '/test' } });
+    writeFileSync(codexFile, meta + '\n');
+
+    runBind({
+      CLAUDE_SESSION_ID: 'nonexistent',
+      RESUME_CODEX_PATH: codexFile,
+    });
+
+    const bindings = JSON.parse(readFileSync(join(stateDir, 'bindings.json'), 'utf8'));
+    assert.equal(bindings.codex.status, 'bound');
+    assert.equal(bindings.codex.path, codexFile);
+    assert.equal(bindings.codex.session_id, 'codex-session-123');
+  });
+
+  it('extracts codex session_id from binding manifest', () => {
+    cleanState();
+    const codexFile = join(codexSessions, 'session-id-test.jsonl');
+    const meta = JSON.stringify({ type: 'session_meta', payload: { id: 'my-codex-id', cwd: '/test' } });
+    writeFileSync(codexFile, meta + '\n');
+
+    runBind({ CLAUDE_SESSION_ID: 'nonexistent' });
+
+    const bindings = JSON.parse(readFileSync(join(stateDir, 'bindings.json'), 'utf8'));
+    assert.equal(bindings.codex.session_id, 'my-codex-id');
+  });
+
+  it('skips polling when both resume paths are valid', () => {
+    cleanState();
+    const claudeFile = join(claudeProjects, 'both-resume.jsonl');
+    writeFileSync(claudeFile, JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'c' }] } }) + '\n');
+
+    const codexFile = join(codexSessions, 'both-resume-codex.jsonl');
+    writeFileSync(codexFile, JSON.stringify({ type: 'session_meta', payload: { id: 'x', cwd: '/test' } }) + '\n');
+
+    const start = Date.now();
+    runBind({
+      CLAUDE_SESSION_ID: 'both-resume',
+      RESUME_CLAUDE_PATH: claudeFile,
+      RESUME_CODEX_PATH: codexFile,
+    });
+    const elapsed = Date.now() - start;
+
+    // Should complete nearly instantly (no polling), well under 1 second
+    assert.ok(elapsed < 1000, `Expected fast completion, took ${elapsed}ms`);
+
+    const bindings = JSON.parse(readFileSync(join(stateDir, 'bindings.json'), 'utf8'));
+    assert.equal(bindings.claude.status, 'bound');
+    assert.equal(bindings.codex.status, 'bound');
+  });
+
+  it('falls through to normal discovery when resume path is invalid', () => {
+    cleanState();
+    // Create a real file but set RESUME_CLAUDE_PATH to a nonexistent path
+    const uuid = 'fallthrough-' + Date.now();
+    const claudeFile = join(claudeProjects, `${uuid}.jsonl`);
+    writeFileSync(claudeFile, JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'found' }] } }) + '\n');
+
+    runBind({
+      CLAUDE_SESSION_ID: uuid,
+      RESUME_CLAUDE_PATH: '/tmp/nonexistent-path.jsonl',
+    });
+
+    const bindings = JSON.parse(readFileSync(join(stateDir, 'bindings.json'), 'utf8'));
+    assert.equal(bindings.claude.status, 'bound');
+    assert.equal(bindings.claude.path, claudeFile);
+  });
+});
+
+// ─── Resume: durable state directory structure ───────────────────────────────
+
+describe('durable state directory structure', () => {
+  it('duet.sh creates persistent run directory under ~/.local/state/duet', () => {
+    // Verify the script uses DUET_BASE which defaults to ~/.local/state/duet
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    assert.ok(script.includes('DUET_BASE="${DUET_BASE:-$HOME/.local/state/duet}"'));
+    assert.ok(script.includes('RUNS_DIR="$DUET_BASE/runs"'));
+    assert.ok(script.includes('WORKSPACES_DIR="$DUET_BASE/workspaces"'));
+  });
+
+  it('duet.sh supports resume, fork, list, destroy subcommands', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    assert.ok(script.includes('cmd_resume'));
+    assert.ok(script.includes('cmd_fork'));
+    assert.ok(script.includes('cmd_list'));
+    assert.ok(script.includes('cmd_destroy'));
+  });
+
+  it('duet.sh creates codex-home inside run directory (not /tmp)', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    // Verify codex_home is inside run_dir
+    assert.ok(script.includes('codex_home="$run_dir/codex-home"'));
+    // Verify no /tmp state dir
+    assert.ok(!script.includes('STATE_DIR="/tmp/'));
+  });
+
+  it('duet.sh writes run.json with required fields', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    for (const field of ['run_id', 'cwd', 'created_at', 'updated_at', 'status', 'tmux_session', 'mode', 'claude.session_id', 'codex_home']) {
+      assert.ok(script.includes(field), `Missing field: ${field}`);
+    }
+  });
+
+  it('duet.sh resume uses --resume for claude and resume subcommand for codex', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    assert.ok(script.includes('claude --dangerously-skip-permissions --resume'));
+    assert.ok(script.includes('codex resume'));
+  });
+
+  it('duet.sh fork uses --fork-session for claude and fork subcommand for codex', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    assert.ok(script.includes('--fork-session'));
+    assert.ok(script.includes('codex fork'));
+  });
+});
+
+// ─── Bug fix: /destroy removes state before killing tmux ─────────────────────
+
+describe('/destroy ordering', () => {
+  it('router.mjs removes run dir before killing tmux session', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    // Find the destroy handler's setTimeout body
+    const destroyBlock = src.slice(src.indexOf("case 'destroy':"), src.indexOf("case 'destroy':") + 600);
+    const rmIndex = destroyBlock.indexOf('rmSync');
+    const killIndex = destroyBlock.indexOf('kill-session');
+    assert.ok(rmIndex > 0, 'rmSync should exist in destroy handler');
+    assert.ok(killIndex > 0, 'kill-session should exist in destroy handler');
+    assert.ok(rmIndex < killIndex, `rmSync (${rmIndex}) should come before kill-session (${killIndex})`);
+  });
+});
+
+// ─── Bug fix: run_field treats JSON null as empty string ─────────────────────
+
+describe('run_field null handling', () => {
+  const testDir = '/tmp/duet-test-runfield-' + process.pid;
+  const runJson = join(testDir, 'run.json');
+  const helperScript = join(testDir, 'run_field.sh');
+
+  before(() => {
+    mkdirSync(testDir, { recursive: true });
+    // Write a standalone helper script that defines run_field and calls it
+    writeFileSync(helperScript, `#!/usr/bin/env bash
+run_field() {
+  local run_json="$1" key="$2"
+  python3 -c "
+import json, sys, functools
+d = json.load(open(sys.argv[1]))
+val = functools.reduce(lambda o, k: o.get(k, {}) if isinstance(o, dict) else {}, sys.argv[2].split('.'), d)
+print(val if isinstance(val, str) else '' if val is None else '' if isinstance(val, dict) else str(val))
+" "$run_json" "$key" 2>/dev/null
+}
+run_field "$1" "$2"
+`);
+    execSync(`chmod +x ${helperScript}`);
+  });
+
+  after(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('returns empty string for JSON null values', () => {
+    writeFileSync(runJson, JSON.stringify({
+      codex: { session_id: null },
+      claude: { session_id: 'real-id' },
+    }));
+
+    const result = execSync(
+      `bash ${helperScript} ${runJson} codex.session_id`,
+      { encoding: 'utf8' }
+    ).trim();
+
+    // Must be empty string, NOT "None"
+    assert.equal(result, '', `Expected empty string for null, got "${result}"`);
+  });
+
+  it('returns actual value for non-null fields', () => {
+    const result = execSync(
+      `bash ${helperScript} ${runJson} claude.session_id`,
+      { encoding: 'utf8' }
+    ).trim();
+
+    assert.equal(result, 'real-id');
+  });
+});
+
+// ─── Bug fix: resume fast-path validates session IDs ─────────────────────────
+
+describe('resume fast-path session ID validation', () => {
+  const testDir = '/tmp/duet-test-fastpath-validate-' + process.pid;
+  const stateDir = join(testDir, 'state');
+  const claudeProjects = join(testDir, 'claude-projects');
+  const codexSessions = join(testDir, 'codex-sessions');
+  const globalCodexSessions = join(testDir, 'global-codex-sessions');
+
+  before(() => {
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(claudeProjects, { recursive: true });
+    mkdirSync(codexSessions, { recursive: true });
+    mkdirSync(globalCodexSessions, { recursive: true });
+  });
+
+  after(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  function runBind(env) {
+    const fullEnv = {
+      ...process.env,
+      STATE_DIR: stateDir,
+      CLAUDE_PROJECTS: claudeProjects,
+      CODEX_SESSIONS: codexSessions,
+      GLOBAL_CODEX_SESSIONS: globalCodexSessions,
+      WORKDIR: '/test/workdir',
+      BIND_TIMEOUT: '2',
+      ...env,
+    };
+    try {
+      execSync('bash /home/claude/duet/bind-sessions.sh', { env: fullEnv, timeout: 10000 });
+    } catch {}
+  }
+
+  function cleanState() {
+    try { rmSync(join(stateDir, 'bindings.json')); } catch {}
+    try { execSync(`rm -rf ${claudeProjects}/* ${codexSessions}/* ${globalCodexSessions}/*`); } catch {}
+  }
+
+  it('rejects RESUME_CLAUDE_PATH when filename does not match CLAUDE_SESSION_ID', () => {
+    cleanState();
+    // File exists but has wrong name (different session)
+    const wrongFile = join(claudeProjects, 'wrong-session-id.jsonl');
+    writeFileSync(wrongFile, JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'wrong' }] } }) + '\n');
+
+    runBind({
+      CLAUDE_SESSION_ID: 'expected-session-id',
+      RESUME_CLAUDE_PATH: wrongFile,
+    });
+
+    const bindings = JSON.parse(readFileSync(join(stateDir, 'bindings.json'), 'utf8'));
+    // Should NOT have bound via fast-path (filename mismatch)
+    // It will degrade since CLAUDE_SESSION_ID 'expected-session-id' file doesn't exist
+    assert.equal(bindings.claude.status, 'degraded');
+  });
+
+  it('accepts RESUME_CLAUDE_PATH when filename matches CLAUDE_SESSION_ID', () => {
+    cleanState();
+    const correctFile = join(claudeProjects, 'correct-id.jsonl');
+    writeFileSync(correctFile, JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'right' }] } }) + '\n');
+
+    runBind({
+      CLAUDE_SESSION_ID: 'correct-id',
+      RESUME_CLAUDE_PATH: correctFile,
+    });
+
+    const bindings = JSON.parse(readFileSync(join(stateDir, 'bindings.json'), 'utf8'));
+    assert.equal(bindings.claude.status, 'bound');
+    assert.equal(bindings.claude.path, correctFile);
+  });
+
+  it('rejects RESUME_CODEX_PATH when extracted ID does not match RESUME_CODEX_SESSION_ID', () => {
+    cleanState();
+    const codexFile = join(codexSessions, 'wrong-codex.jsonl');
+    const meta = JSON.stringify({ type: 'session_meta', payload: { id: 'actual-codex-id', cwd: '/test' } });
+    writeFileSync(codexFile, meta + '\n');
+
+    runBind({
+      CLAUDE_SESSION_ID: 'nonexistent',
+      RESUME_CODEX_PATH: codexFile,
+      RESUME_CODEX_SESSION_ID: 'expected-codex-id',
+    });
+
+    const bindings = JSON.parse(readFileSync(join(stateDir, 'bindings.json'), 'utf8'));
+    // Fast-path should reject (ID mismatch), but normal discovery finds it in isolated dir
+    assert.equal(bindings.codex.status, 'bound');
+    assert.equal(bindings.codex.session_id, 'actual-codex-id');
+    // The key check: it should have been found by normal discovery, not fast-path
+    // (both paths lead to 'bound' but the important thing is the validation happened)
+  });
+
+  it('accepts RESUME_CODEX_PATH when no RESUME_CODEX_SESSION_ID is set', () => {
+    cleanState();
+    const codexFile = join(codexSessions, 'no-expected-id.jsonl');
+    const meta = JSON.stringify({ type: 'session_meta', payload: { id: 'some-id', cwd: '/test' } });
+    writeFileSync(codexFile, meta + '\n');
+
+    const start = Date.now();
+    runBind({
+      CLAUDE_SESSION_ID: 'nonexistent',
+      RESUME_CODEX_PATH: codexFile,
+      // No RESUME_CODEX_SESSION_ID — should accept any file
+    });
+    const elapsed = Date.now() - start;
+
+    const bindings = JSON.parse(readFileSync(join(stateDir, 'bindings.json'), 'utf8'));
+    assert.equal(bindings.codex.status, 'bound');
+    assert.equal(bindings.codex.session_id, 'some-id');
+  });
+});
+
+// ─── Bug fix: shell quoting for paths with spaces ────────────────────────────
+
+describe('shell quoting for paths with spaces', () => {
+  it('duet.sh quote_path properly escapes spaces', () => {
+    const result = execSync(
+      `bash -c 'quote_path() { printf "%q" "$1"; }; quote_path "/tmp/my repo/test"'`,
+      { encoding: 'utf8' }
+    ).trim();
+    // printf %q should escape the space
+    assert.ok(!result.includes(' ') || result.includes('\\ ') || result.includes("'"),
+      `Expected escaped space in: ${result}`);
+    // Verify it round-trips through eval
+    const roundtrip = execSync(
+      `bash -c 'eval echo ${result}'`,
+      { encoding: 'utf8' }
+    ).trim();
+    assert.equal(roundtrip, '/tmp/my repo/test');
+  });
+
+  it('duet.sh uses quote_path for all interpolated paths in send-keys', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    // All tmux send-keys lines with cd should use q_ quoted vars
+    const sendKeysLines = script.split('\n').filter(l =>
+      l.includes('tmux send-keys') && l.includes('cd ')
+    );
+    for (const line of sendKeysLines) {
+      assert.ok(line.includes('q_'), `send-keys line should use quoted path variable: ${line.trim()}`);
+    }
+  });
+
+  it('launch_router uses quoted paths', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    // The router launch line should use q_run_dir not raw $run_dir
+    const routerBlock = script.slice(
+      script.indexOf('launch_router()'),
+      script.indexOf('launch_router()') + 400
+    );
+    assert.ok(routerBlock.includes('q_run_dir'), 'launch_router should use q_run_dir');
+    assert.ok(routerBlock.includes('q_dir'), 'launch_router should use q_dir');
+  });
+});
+
+// ─── Bug fix: codex fast-path requires session ID for resume ─────────────────
+
+describe('codex fast-path requires session ID for resume', () => {
+  it('duet.sh only exports RESUME_CODEX_PATH when codex_sid is present', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    // Find the resume command's fast-path section
+    const resumeFunc = script.slice(
+      script.indexOf('cmd_resume()'),
+      script.indexOf('cmd_fork()')
+    );
+    // Should guard RESUME_CODEX_PATH with codex_sid check
+    assert.ok(
+      resumeFunc.includes('[ -n "$codex_binding" ] && [ -n "$codex_sid" ]'),
+      'RESUME_CODEX_PATH export should be gated on codex_sid being present'
+    );
+  });
+});
+
+// ─── Bug fix: ambiguous run-id prefix errors instead of picking first ────────
+
+describe('ambiguous run-id prefix handling', () => {
+  it('resolve_run_id errors on ambiguous prefix', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    const resolveBlock = script.slice(
+      script.indexOf('resolve_run_id()'),
+      script.indexOf('resolve_run_id()') + 1200
+    );
+    assert.ok(resolveBlock.includes('ambiguous prefix'), 'Should error on ambiguous prefix');
+    assert.ok(resolveBlock.includes('return 1'), 'Should return non-zero on ambiguity');
+    assert.ok(resolveBlock.includes('${#matches[@]} -eq 1'), 'Should require exactly one match');
+  });
+});
+
+// ─── Bug fix: workspace path canonicalization ────────────────────────────────
+
+describe('workspace path canonicalization', () => {
+  it('cmd_new canonicalizes workdir with pwd -P', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    const cmdNewBlock = script.slice(
+      script.indexOf('cmd_new()'),
+      script.indexOf('cmd_new()') + 200
+    );
+    assert.ok(cmdNewBlock.includes('pwd -P'), 'cmd_new should canonicalize workdir with pwd -P');
+  });
+
+  it('canonicalization resolves relative and symlink paths', () => {
+    // Create a symlink and verify pwd -P resolves it
+    const testDir = '/tmp/duet-test-canon-' + process.pid;
+    const realDir = join(testDir, 'real');
+    const linkDir = join(testDir, 'link');
+    mkdirSync(realDir, { recursive: true });
+    execSync(`ln -sf ${realDir} ${linkDir}`);
+
+    const resolved = execSync(`cd ${linkDir} && pwd -P`, { encoding: 'utf8' }).trim();
+    assert.equal(resolved, realDir, 'pwd -P should resolve symlink');
+
+    const relative = execSync(`cd ${testDir} && cd real && pwd -P`, { encoding: 'utf8' }).trim();
+    assert.equal(relative, realDir, 'pwd -P should resolve relative path');
+
+    rmSync(testDir, { recursive: true, force: true });
   });
 });

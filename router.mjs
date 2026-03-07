@@ -7,8 +7,12 @@ const SESSION = process.env.DUET_SESSION || 'duet';
 const CLAUDE_PANE = process.env.CLAUDE_PANE;
 const CODEX_PANE = process.env.CODEX_PANE;
 export let STATE_DIR = process.env.DUET_STATE_DIR || null;
+let DUET_MODE = process.env.DUET_MODE || 'new';   // 'new' | 'resumed' | 'forked'
+let DUET_RUN_DIR = process.env.DUET_RUN_DIR || null;
 
 export function setStateDir(dir) { STATE_DIR = dir; bindingsCache = null; }
+export function setDuetMode(mode) { DUET_MODE = mode; }
+export function setRunDir(dir) { DUET_RUN_DIR = dir; }
 
 const PANES = { claude: CLAUDE_PANE, codex: CODEX_PANE };
 
@@ -127,6 +131,30 @@ export const sessionState = {
 // The router re-reads the manifest while any tool is still "pending" and
 // upgrades transport (pane → session file watcher) when status flips to "bound".
 
+// ─── Run manifest (run.json) updates ──────────────────────────────────────────
+
+export function updateRunJson(updates) {
+  const runDir = DUET_RUN_DIR;
+  if (!runDir) return;
+  const path = join(runDir, 'run.json');
+  try {
+    let data = {};
+    if (existsSync(path)) {
+      data = JSON.parse(readFileSync(path, 'utf8'));
+    }
+    for (const [key, value] of Object.entries(updates)) {
+      if (key.includes('.')) {
+        const [parent, child] = key.split('.', 2);
+        if (!data[parent] || typeof data[parent] !== 'object') data[parent] = {};
+        data[parent][child] = value;
+      } else {
+        data[key] = value;
+      }
+    }
+    writeFileSync(path, JSON.stringify(data, null, 2));
+  } catch {}
+}
+
 // Cache for the parsed bindings.json manifest
 let bindingsCache = null;
 
@@ -164,6 +192,20 @@ export function resolveSessionPath(tool) {
       st.resolved = true;
       st.relayMode = 'session';
       st.bindingLevel = b.level || null;
+
+      // On resume, seek reader to end of file to avoid replaying history
+      if (DUET_MODE === 'resumed' && st.path) {
+        try {
+          const { size } = statSync(st.path);
+          st.offset = size;
+        } catch {}
+      }
+
+      // Propagate binding info to run.json
+      const updates = { [`${tool}.binding_path`]: b.path, updated_at: new Date().toISOString() };
+      if (b.session_id) updates[`${tool}.session_id`] = b.session_id;
+      updateRunJson(updates);
+
       return st.path;
     }
     if (b.status === 'degraded') {
@@ -181,7 +223,7 @@ export function resolveSessionPath(tool) {
   return null;
 }
 
-function readIncremental(tool) {
+export function readIncremental(tool) {
   const st = sessionState[tool];
   const filePath = resolveSessionPath(tool);
   if (!filePath) return { hasNew: false, complete: false };
@@ -565,6 +607,8 @@ export function parseInput(input) {
 
   if (input === '/help') return { type: 'help' };
   if (input === '/quit' || input === '/exit') return { type: 'quit' };
+  if (input === '/detach') return { type: 'detach' };
+  if (input === '/destroy') return { type: 'destroy' };
   if (input === '/clear') return { type: 'clear' };
   if (input === '/watch') return { type: 'watch' };
   if (input === '/stop') return { type: 'stop' };
@@ -630,7 +674,9 @@ ${C.cyan}${C.bold}  DUET ${C.reset}${C.dim} - Claude Code + Codex, one conversat
   ${C.dim}/focus claude|codex      Switch to pane (click router pane to return)
   /snap  claude|codex      View last output from a pane
   /clear                   Clear this screen
-  /quit                    Exit duet
+  /quit                    Stop tools, preserve state for resume
+  /detach                  Detach — tools keep running
+  /destroy                 Stop tools and remove all run state
   /help                    Show this help${C.reset}
 `);
 }
@@ -645,14 +691,31 @@ function handleInput(input) {
     case 'help': return printBanner();
     case 'quit':
       stopPolling();
-      console.log(`${C.dim}Shutting down claude...${C.reset}`);
+      console.log(`${C.dim}Stopping tools...${C.reset}`);
       sendKeys(PANES.claude, '/exit');
-      console.log(`${C.dim}Shutting down codex...${C.reset}`);
       sendKeys(PANES.codex, '/exit');
-      console.log(`${C.dim}Waiting for tools to exit...${C.reset}`);
+      updateRunJson({ status: 'stopped', updated_at: new Date().toISOString() });
+      console.log(`${C.dim}Run state preserved — use 'duet resume' to continue.${C.reset}`);
       setTimeout(() => {
         try { execSync(`tmux kill-session -t ${shellEscape(SESSION)}`); } catch {}
-        if (STATE_DIR) { try { rmSync(STATE_DIR, { recursive: true, force: true }); } catch {} }
+        process.exit(0);
+      }, 3000);
+      return;
+    case 'detach':
+      console.log(`${C.dim}Detaching — tools will keep running. Reattach with 'duet'.${C.reset}`);
+      try { execSync(`tmux detach-client -s ${shellEscape(SESSION)}`); } catch {
+        console.log(`${C.red}Failed to detach${C.reset}`);
+      }
+      return;
+    case 'destroy':
+      stopPolling();
+      console.log(`${C.dim}Destroying run — stopping tools and removing state...${C.reset}`);
+      sendKeys(PANES.claude, '/exit');
+      sendKeys(PANES.codex, '/exit');
+      setTimeout(() => {
+        // Remove persistent state BEFORE killing tmux (which kills this process)
+        if (DUET_RUN_DIR) { try { rmSync(DUET_RUN_DIR, { recursive: true, force: true }); } catch {} }
+        try { execSync(`tmux kill-session -t ${shellEscape(SESSION)}`); } catch {}
         process.exit(0);
       }, 3000);
       return;
@@ -775,6 +838,12 @@ if (isMain) {
   });
 
   printBanner();
+
+  if (DUET_MODE === 'resumed') {
+    console.log(`${C.green}Resumed session — reader initialized at EOF to skip history${C.reset}`);
+  } else if (DUET_MODE === 'forked') {
+    console.log(`${C.green}Forked session${C.reset}`);
+  }
 
   // Auto-start watching for @mentions (also sets up file watchers for session-bound tools)
   startPolling();
