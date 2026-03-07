@@ -1886,6 +1886,73 @@ for rj in runs_dir.glob('*/run.json'):
     assert.ok(script.includes("c_sid[:8]"));
     assert.ok(script.includes("x_sid[:8]"));
   });
+
+  it('end-to-end: renders full output with correct ordering and format', () => {
+    rmSync(runsDir, { recursive: true, force: true });
+    mkdirSync(runsDir, { recursive: true });
+
+    createRun('aaaaaaaa-0000-0000-0000-000000000001', {
+      status: 'stopped', updated_at: '2026-03-07T03:00:00Z',
+    });
+    createRun('bbbbbbbb-0000-0000-0000-000000000002', {
+      status: 'active', updated_at: '2026-03-07T01:00:00Z',
+    });
+    createRun('cccccccc-0000-0000-0000-000000000003', {
+      status: 'active', updated_at: '2026-03-07T05:00:00Z',
+      claude: { session_id: '' }, codex: {},
+    });
+
+    // Extract and run the Python heredoc from duet.sh
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    const start = script.indexOf("<<'PYLIST'") + "<<'PYLIST'".length;
+    const end = script.indexOf('\nPYLIST', start);
+    const pyCode = script.slice(start, end);
+
+    const output = execSync(
+      `python3 - "${runsDir}" "duet.sh"`,
+      { encoding: 'utf8', input: pyCode }
+    ).trim();
+
+    const lines = output.split('\n');
+    // Header
+    assert.ok(lines[0].includes('DUET RUNS'));
+    // Active runs appear before stopped
+    const activeLines = lines.filter(l => l.includes('active'));
+    const stoppedLines = lines.filter(l => l.includes('stopped'));
+    const firstActive = lines.findIndex(l => l.includes('active'));
+    const firstStopped = lines.findIndex(l => l.includes('stopped'));
+    assert.ok(firstActive < firstStopped, 'active runs should appear before stopped');
+    // Most recent active first (cccccccc at 05:00 before bbbbbbbb at 01:00)
+    const ccIdx = lines.findIndex(l => l.includes('cccccccc'));
+    const bbIdx = lines.findIndex(l => l.includes('bbbbbbbb'));
+    assert.ok(ccIdx < bbIdx, 'most recent active run should appear first');
+    // Resume hint only for stopped
+    assert.ok(output.includes('resume:  duet.sh resume aaaaaaaa'));
+    assert.ok(!output.includes('resume:  duet.sh resume bbbbbbbb'));
+    assert.ok(!output.includes('resume:  duet.sh resume cccccccc'));
+    // Missing session IDs
+    assert.ok(output.includes('claude:  missing'));
+    assert.ok(output.includes('codex: missing'));
+    // Present session IDs are shortened
+    assert.ok(output.includes('claude-s\u2026'));
+  });
+
+  it('end-to-end: shows "(no runs found)" for empty directory', () => {
+    rmSync(runsDir, { recursive: true, force: true });
+    mkdirSync(runsDir, { recursive: true });
+
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    const start = script.indexOf("<<'PYLIST'") + "<<'PYLIST'".length;
+    const end = script.indexOf('\nPYLIST', start);
+    const pyCode = script.slice(start, end);
+
+    const output = execSync(
+      `python3 - "${runsDir}" "duet.sh"`,
+      { encoding: 'utf8', input: pyCode }
+    ).trim();
+
+    assert.ok(output.includes('(no runs found)'));
+  });
 });
 
 // ─── Role prompt injection ────────────────────────────────────────────────────

@@ -544,33 +544,89 @@ cmd_fork() {
 # ─── Subcommand: list ─────────────────────────────────────────────────────────
 
 cmd_list() {
-  echo "DUET RUNS"
-  echo "========="
-  local found=false
-  for run_json in "$RUNS_DIR"/*/run.json; do
-    [ -f "$run_json" ] || continue
-    found=true
-    python3 -c "
-import json, sys
-d = json.load(open(sys.argv[1]))
-rid = d.get('run_id','?')
-short = rid[:8]
-cwd = d.get('cwd','?')
-status = d.get('status','?')
-mode = d.get('mode','?')
-updated = d.get('updated_at','?')
-c_sid = (d.get('claude') or {}).get('session_id','')
-x_sid = (d.get('codex') or {}).get('session_id','')
-c_ok = 'yes' if c_sid else 'no'
-x_ok = 'yes' if x_sid else 'no'
-tmux = d.get('tmux_session','')
-print(f'  {short}  {status:<10} {mode:<8} {cwd}')
-print(f'           claude:{c_ok}  codex:{x_ok}  tmux:{tmux}  updated:{updated}')
-" "$run_json"
-  done
-  if [ "$found" = false ]; then
-    echo "  (no runs found)"
-  fi
+  python3 - "$RUNS_DIR" "${0##*/}" <<'PYLIST'
+import json, sys, os, pathlib
+
+runs_dir = pathlib.Path(sys.argv[1])
+prog = sys.argv[2]
+MAX_TITLE = 72
+
+def get_codex_title(codex_home, codex_sid):
+    """Extract conversation title from Codex SQLite, with fallbacks."""
+    if not codex_home or not codex_sid:
+        return None
+    db_path = os.path.join(codex_home, 'state_5.sqlite')
+    if not os.path.isfile(db_path):
+        return None
+    try:
+        import sqlite3
+        db = sqlite3.connect(db_path)
+        cur = db.cursor()
+        cur.execute('SELECT title, first_user_message FROM threads WHERE id = ?', (codex_sid,))
+        row = cur.fetchone()
+        db.close()
+        if row:
+            title = row[0] or row[1] or None
+            if title and len(title) > MAX_TITLE:
+                title = title[:MAX_TITLE - 1] + '\u2026'
+            return title
+    except Exception:
+        pass
+    return None
+
+runs = []
+for rj in runs_dir.glob('*/run.json'):
+    try:
+        data = json.load(open(rj))
+    except Exception:
+        continue
+    rid = data.get('run_id') or rj.parent.name
+    claude = data.get('claude') or {}
+    codex = data.get('codex') or {}
+    c_sid = claude.get('session_id', '')
+    x_sid = codex.get('session_id', '')
+    status = data.get('status', '?')
+    title = get_codex_title(data.get('codex_home'), x_sid)
+    runs.append({
+        'rid': rid,
+        'short': rid[:8],
+        'status': status,
+        'mode': data.get('mode', '?'),
+        'cwd': data.get('cwd', '?'),
+        'updated': data.get('updated_at', '?'),
+        'claude': c_sid[:8] + '\u2026' if c_sid else 'missing',
+        'codex': x_sid[:8] + '\u2026' if x_sid else 'missing',
+        'tmux': data.get('tmux_session', ''),
+        'title': title,
+        'resumable': status in ('stopped', 'detached'),
+    })
+
+# Active runs first, then most-recently-updated first within each group
+active = sorted([r for r in runs if r['status'] == 'active'], key=lambda r: r['updated'], reverse=True)
+rest = sorted([r for r in runs if r['status'] != 'active'], key=lambda r: r['updated'], reverse=True)
+runs = active + rest
+
+print('DUET RUNS')
+print('=========')
+
+if not runs:
+    print('  (no runs found)')
+    raise SystemExit(0)
+
+for run in runs:
+    print(f"\n{run['short']}  {run['status']}  {run['mode']}")
+    if run['title']:
+        print(f"  title:   {run['title']}")
+    print(f"  cwd:     {run['cwd']}")
+    print(f"  updated: {run['updated']}")
+    print(f"  claude:  {run['claude']}   codex: {run['codex']}")
+    if run['tmux']:
+        print(f"  tmux:    {run['tmux']}")
+    if run['resumable']:
+        print(f"  resume:  {prog} resume {run['short']}")
+
+print()
+PYLIST
 }
 
 # ─── Subcommand: destroy ──────────────────────────────────────────────────────
