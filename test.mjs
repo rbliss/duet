@@ -6,7 +6,7 @@ import { existsSync } from 'fs';
 import { writeFileSync, mkdirSync, rmSync, appendFileSync } from 'fs';
 import { join } from 'path';
 
-import { shellEscape, parseInput, sendKeys, capturePane, pasteToPane, focusPane, getNewContent, detectMentions, cleanCapture, extractClaudeResponse, extractCodexResponse, sessionState, getClaudeLastResponse, getCodexLastResponse } from './router.mjs';
+import { shellEscape, parseInput, sendKeys, capturePane, pasteToPane, focusPane, getNewContent, detectMentions, cleanCapture, extractClaudeResponse, extractCodexResponse, sessionState, getClaudeLastResponse, getCodexLastResponse, resolveSessionPath, setStateDir } from './router.mjs';
 
 // ─── Unit Tests: shellEscape ─────────────────────────────────────────────────
 
@@ -746,6 +746,134 @@ describe('incremental session reader', () => {
     // Now complete the line
     appendFileSync(claudeLog, '\n');
     assert.equal(getClaudeLastResponse(), 'Partial');
+  });
+});
+
+// ─── Integration Tests: end-to-end session binding ───────────────────────────
+
+describe('end-to-end session binding', () => {
+  const stateDir = '/tmp/duet-test-binding-' + process.pid;
+  const sessionDir = '/tmp/duet-test-sessions-e2e-' + process.pid;
+  const claudeLog = join(sessionDir, 'test-claude.jsonl');
+  const codexLog = join(sessionDir, 'test-codex.jsonl');
+
+  // Save original state to restore after tests
+  let origStateDir;
+  let origClaude;
+  let origCodex;
+
+  before(() => {
+    origStateDir = undefined; // STATE_DIR from env, will restore via setStateDir
+    origClaude = { ...sessionState.claude };
+    origCodex = { ...sessionState.codex };
+
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true });
+  });
+
+  after(() => {
+    // Restore original state
+    setStateDir(null);
+    Object.assign(sessionState.claude, origClaude);
+    Object.assign(sessionState.codex, origCodex);
+    rmSync(stateDir, { recursive: true, force: true });
+    rmSync(sessionDir, { recursive: true, force: true });
+  });
+
+  function resetSessionState() {
+    setStateDir(stateDir);
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending' };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending' };
+  }
+
+  it('resolves claude binding from state dir path file', () => {
+    // Write a session log file
+    const msg = JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'Hello from Claude' }] } });
+    writeFileSync(claudeLog, msg + '\n');
+
+    // Write the path file (as duet.sh would)
+    writeFileSync(join(stateDir, 'claude-session.path'), claudeLog);
+
+    resetSessionState();
+
+    // resolveSessionPath should find the path file and bind
+    const resolved = resolveSessionPath('claude');
+    assert.equal(resolved, claudeLog);
+    assert.equal(sessionState.claude.resolved, true);
+    assert.equal(sessionState.claude.relayMode, 'session');
+
+    // getClaudeLastResponse should work through the full chain
+    assert.equal(getClaudeLastResponse(), 'Hello from Claude');
+  });
+
+  it('resolves codex binding from state dir path file', () => {
+    const msg = JSON.stringify({ payload: { type: 'task_complete', last_agent_message: 'Hello from Codex' } });
+    writeFileSync(codexLog, msg + '\n');
+
+    writeFileSync(join(stateDir, 'codex-session.path'), codexLog);
+
+    resetSessionState();
+
+    const resolved = resolveSessionPath('codex');
+    assert.equal(resolved, codexLog);
+    assert.equal(sessionState.codex.resolved, true);
+    assert.equal(sessionState.codex.relayMode, 'session');
+
+    assert.equal(getCodexLastResponse(), 'Hello from Codex');
+  });
+
+  it('returns null and sets pane mode when no state dir', () => {
+    resetSessionState();
+    setStateDir(null);
+
+    const resolved = resolveSessionPath('claude');
+    assert.equal(resolved, null);
+    assert.equal(sessionState.claude.relayMode, 'pane');
+    assert.equal(getClaudeLastResponse(), null);
+  });
+
+  it('returns null and stays pending when path file missing', () => {
+    resetSessionState();
+    // stateDir exists but has no path files after reset
+    // Remove any leftover path files
+    try { rmSync(join(stateDir, 'claude-session.path')); } catch {}
+    try { rmSync(join(stateDir, 'codex-session.path')); } catch {}
+
+    const resolved = resolveSessionPath('claude');
+    assert.equal(resolved, null);
+    assert.equal(sessionState.claude.relayMode, 'pending');
+  });
+
+  it('picks up late binding when path file appears after first call', () => {
+    resetSessionState();
+    // Remove path files
+    try { rmSync(join(stateDir, 'claude-session.path')); } catch {}
+
+    // First call: no binding
+    assert.equal(resolveSessionPath('claude'), null);
+    assert.equal(sessionState.claude.relayMode, 'pending');
+
+    // Write path file (simulating late launcher write)
+    const msg = JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'Late binding' }] } });
+    writeFileSync(claudeLog, msg + '\n');
+    writeFileSync(join(stateDir, 'claude-session.path'), claudeLog);
+
+    // Second call: should now resolve
+    assert.equal(resolveSessionPath('claude'), claudeLog);
+    assert.equal(sessionState.claude.relayMode, 'session');
+    assert.equal(getClaudeLastResponse(), 'Late binding');
+  });
+
+  it('caches resolved path and does not re-read path file', () => {
+    resetSessionState();
+    writeFileSync(join(stateDir, 'claude-session.path'), claudeLog);
+
+    resolveSessionPath('claude');
+    assert.equal(sessionState.claude.resolved, true);
+
+    // Overwrite path file with different path — should be ignored
+    writeFileSync(join(stateDir, 'claude-session.path'), '/nonexistent/path.jsonl');
+    assert.equal(resolveSessionPath('claude'), claudeLog);
   });
 });
 

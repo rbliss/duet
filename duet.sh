@@ -13,8 +13,9 @@ for cmd in tmux claude codex node; do
   fi
 done
 
-# Kill existing session if any
+# Kill existing session and clean up its state
 tmux kill-session -t "$SESSION" 2>/dev/null || true
+rm -rf "/tmp/duet-state-$SESSION"
 
 # Compute layout sizes (use -l lines/cols to avoid tmux 3.4 detach bug with -p)
 COLS="$(tput cols)"
@@ -59,34 +60,59 @@ DUET_INSTRUCTIONS="$DIR/DUET.md"
 WORKDIR="${1:-$(pwd)}"
 
 # --- Per-run state directory for session binding ---
-STATE_DIR="/tmp/duet-state-$$"
+# Keyed by session name (not PID) so it outlives the bootstrap shell.
+# Cleaned up when a new duet session starts or when /quit runs.
+STATE_DIR="/tmp/duet-state-$SESSION"
 mkdir -p "$STATE_DIR"
-cleanup_state() { rm -rf "$STATE_DIR"; }
-trap cleanup_state EXIT
 
-# Snapshot session dirs before launching tools
+# --- Session binding ---
+# Claude: --session-id gives us a known UUID; we find the file by name after launch.
+#   Guarantee: process-level (UUID is unique to this exact launch).
+# Codex: no session-id flag; we poll for new files and confirm via session_meta.cwd.
+#   Guarantee: workspace-level (unique per working directory, not per process).
+#   Two concurrent Codex sessions in the same directory could collide, but this
+#   requires launching two Codex instances to the same dir within the same 0.5s tick.
+CLAUDE_SESSION_ID=$(uuidgen)
 CLAUDE_PROJECTS="$HOME/.claude/projects"
 CODEX_SESSIONS="$HOME/.codex/sessions"
-find "$CLAUDE_PROJECTS" -name '*.jsonl' -type f 2>/dev/null | sort > "$STATE_DIR/claude-before.list"
 find "$CODEX_SESSIONS" -name '*.jsonl' -type f 2>/dev/null | sort > "$STATE_DIR/codex-before.list"
 
 # --- Launch tools ---
 DUET_PROMPT=$(cat "$DUET_INSTRUCTIONS")
-tmux send-keys -t "$CLAUDE_PANE" "cd $WORKDIR && claude --dangerously-skip-permissions --append-system-prompt '$(echo "$DUET_PROMPT" | sed "s/'/'\\\\''/g")'" Enter
+tmux send-keys -t "$CLAUDE_PANE" "cd $WORKDIR && claude --dangerously-skip-permissions --session-id $CLAUDE_SESSION_ID --append-system-prompt '$(echo "$DUET_PROMPT" | sed "s/'/'\\\\''/g")'" Enter
 tmux send-keys -t "$CODEX_PANE" "cd $WORKDIR && codex --dangerously-bypass-approvals-and-sandbox -c model_instructions_file='$DUET_INSTRUCTIONS'" Enter
 
-# Wait for CLIs to create their session files
-sleep 3
-
-# Diff to find new session files created by this launch
-find "$CLAUDE_PROJECTS" -name '*.jsonl' -type f 2>/dev/null | sort > "$STATE_DIR/claude-after.list"
-find "$CODEX_SESSIONS" -name '*.jsonl' -type f 2>/dev/null | sort > "$STATE_DIR/codex-after.list"
-
-CLAUDE_SESSION_FILE=$(comm -13 "$STATE_DIR/claude-before.list" "$STATE_DIR/claude-after.list" | tail -1)
-CODEX_SESSION_FILE=$(comm -13 "$STATE_DIR/codex-before.list" "$STATE_DIR/codex-after.list" | tail -1)
-
-[ -n "$CLAUDE_SESSION_FILE" ] && echo "$CLAUDE_SESSION_FILE" > "$STATE_DIR/claude-session.path"
-[ -n "$CODEX_SESSION_FILE" ] && echo "$CODEX_SESSION_FILE" > "$STATE_DIR/codex-session.path"
+# Poll for both session files (check every 0.5s, up to 15s)
+CLAUDE_BOUND=false
+CODEX_BOUND=false
+for i in $(seq 1 30); do
+  sleep 0.5
+  # Claude: find our UUID file anywhere in the projects tree
+  if [ "$CLAUDE_BOUND" = false ]; then
+    CLAUDE_SESSION_FILE=$(find "$CLAUDE_PROJECTS" -name "$CLAUDE_SESSION_ID.jsonl" -type f 2>/dev/null | head -1)
+    if [ -n "$CLAUDE_SESSION_FILE" ]; then
+      echo "$CLAUDE_SESSION_FILE" > "$STATE_DIR/claude-session.path"
+      CLAUDE_BOUND=true
+    fi
+  fi
+  # Codex: find new files and confirm cwd matches our workdir
+  if [ "$CODEX_BOUND" = false ]; then
+    find "$CODEX_SESSIONS" -name '*.jsonl' -type f 2>/dev/null | sort > "$STATE_DIR/codex-after.list"
+    for candidate in $(comm -13 "$STATE_DIR/codex-before.list" "$STATE_DIR/codex-after.list"); do
+      CANDIDATE_CWD=$(head -1 "$candidate" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('payload',{}).get('cwd',''))" 2>/dev/null)
+      if [ "$CANDIDATE_CWD" = "$WORKDIR" ]; then
+        echo "$candidate" > "$STATE_DIR/codex-session.path"
+        CODEX_BOUND=true
+        break
+      fi
+    done
+  fi
+  # Stop polling once both are bound
+  if [ "$CLAUDE_BOUND" = true ] && [ "$CODEX_BOUND" = true ]; then
+    break
+  fi
+done
+rm -f "$STATE_DIR/codex-before.list" "$STATE_DIR/codex-after.list"
 
 # Launch router
 tmux send-keys -t "$ROUTER_PANE" \

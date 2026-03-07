@@ -1,12 +1,14 @@
 import { createInterface } from 'readline';
 import { execSync } from 'child_process';
-import { writeFileSync, unlinkSync, readFileSync, existsSync, statSync, openSync, readSync, closeSync } from 'fs';
+import { writeFileSync, unlinkSync, readFileSync, existsSync, statSync, openSync, readSync, closeSync, rmSync } from 'fs';
 import { join } from 'path';
 
 const SESSION = process.env.DUET_SESSION || 'duet';
 const CLAUDE_PANE = process.env.CLAUDE_PANE;
 const CODEX_PANE = process.env.CODEX_PANE;
-const STATE_DIR = process.env.DUET_STATE_DIR || null;
+export let STATE_DIR = process.env.DUET_STATE_DIR || null;
+
+export function setStateDir(dir) { STATE_DIR = dir; }
 
 const PANES = { claude: CLAUDE_PANE, codex: CODEX_PANE };
 
@@ -76,10 +78,16 @@ export function focusPane(pane) {
 
 // ─── Session log readers (clean text from tool logs) ─────────────────────────
 //
-// Session binding is explicit: duet.sh snapshots session dirs before/after
-// launching each tool, diffs to find the new file, and writes the resolved
-// path to STATE_DIR/{claude,codex}-session.path. The router reads those paths
-// once and never scans global session history.
+// Session binding is confirmed at launch, not inferred from filesystem timing.
+//   - Claude: duet.sh generates a UUID, passes --session-id, then polls until
+//     the file appears on disk. The confirmed path is written to state dir.
+//   - Codex: duet.sh polls for new .jsonl files and confirms ownership by
+//     checking session_meta.cwd matches the working directory.
+// Both bindings are only written after the actual file is confirmed on disk.
+// The router reads those paths once and never scans global session history.
+//
+// The STATE_DIR lifetime is tied to the Duet session (not the bootstrap shell).
+// It persists until /quit cleans it up or a new Duet session replaces it.
 //
 // Each session is read incrementally via a byte-offset cursor. On each call
 // we read only new bytes appended since the last read, parse complete JSONL
@@ -88,25 +96,34 @@ export function focusPane(pane) {
 //   - Read cost is proportional to new output, not total file size
 //   - No risk of a fixed tail window cutting into a long response
 
+// relayMode tracks relay source quality per tool:
+//   'pending'  — binding not yet resolved
+//   'session'  — authoritative session-log relay active
+//   'pane'     — fallback to pane capture (no session binding)
 export const sessionState = {
-  claude: { path: null, resolved: false, offset: 0, lastResponse: null },
-  codex:  { path: null, resolved: false, offset: 0, lastResponse: null },
+  claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending' },
+  codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending' },
 };
 
-function resolveSessionPath(tool) {
+export function resolveSessionPath(tool) {
   const st = sessionState[tool];
   if (st.resolved) return st.path;
-  if (!STATE_DIR) return null;
+  if (!STATE_DIR) {
+    st.relayMode = 'pane';
+    return null;
+  }
   const pathFile = join(STATE_DIR, `${tool}-session.path`);
   try {
     if (existsSync(pathFile)) {
       const p = readFileSync(pathFile, 'utf8').trim();
-      if (p && existsSync(p)) {
+      if (p) {
         st.path = p;
         st.resolved = true;
+        st.relayMode = 'session';
       }
     }
   } catch {}
+  if (!st.resolved) st.relayMode = 'pending';
   return st.path;
 }
 
@@ -311,6 +328,8 @@ function getCleanResponse(source, fallbackContent) {
   const logResponse = getLastResponse(source);
   if (logResponse && logResponse.length > 10) return logResponse;
   // Fall back to cleaned pane capture
+  const st = sessionState[source];
+  if (st.relayMode === 'session') st.relayMode = 'pane';
   return cleanCapture(fallbackContent) || fallbackContent;
 }
 
@@ -328,7 +347,8 @@ function handleNewOutput(source, newContent) {
   if (mentionsOther && !converseState) {
     lastAutoRelayTime = now;
     const response = getCleanResponse(source, newContent);
-    console.log(`\n${C.blue}[auto] ${source} mentioned @${other} — relaying${C.reset}`);
+    const mode = sessionState[source].relayMode;
+    console.log(`\n${C.blue}[auto|${mode}] ${source} mentioned @${other} — relaying${C.reset}`);
     const msg = `${source} says:\n${response}`;
     pasteToPane(PANES[other], msg);
     prompt();
@@ -347,7 +367,8 @@ function handleNewOutput(source, newContent) {
 
     lastAutoRelayTime = now;
     const response = getCleanResponse(source, newContent);
-    console.log(`\n${C.blue}[converse] round ${converseState.rounds}/${converseState.maxRounds}: ${source} -> ${other}${C.reset}`);
+    const mode = sessionState[source].relayMode;
+    console.log(`\n${C.blue}[converse|${mode}] round ${converseState.rounds}/${converseState.maxRounds}: ${source} -> ${other}${C.reset}`);
     const msg = `${source} says (round ${converseState.rounds} on "${converseState.topic}"):\n${response}`;
     pasteToPane(PANES[other], msg);
     converseState.turn = other;
@@ -449,6 +470,7 @@ function handleInput(input) {
       console.log(`${C.dim}Waiting for tools to exit...${C.reset}`);
       setTimeout(() => {
         try { execSync(`tmux kill-session -t ${shellEscape(SESSION)}`); } catch {}
+        if (STATE_DIR) { try { rmSync(STATE_DIR, { recursive: true, force: true }); } catch {} }
         process.exit(0);
       }, 3000);
       return;
@@ -468,7 +490,7 @@ function handleInput(input) {
         console.log(`${C.dim}Nothing running${C.reset}`);
       }
       return;
-    case 'status':
+    case 'status': {
       if (converseState) {
         console.log(`${C.cyan}Converse:${C.reset} "${converseState.topic}" — round ${converseState.rounds}/${converseState.maxRounds}, waiting on ${converseState.turn}`);
       } else if (isWatching()) {
@@ -476,7 +498,13 @@ function handleInput(input) {
       } else {
         console.log(`${C.dim}Idle — not watching${C.reset}`);
       }
+      const modeColor = (m) => m === 'session' ? C.green : m === 'pane' ? C.yellow : C.dim;
+      const claudeMode = sessionState.claude.relayMode;
+      const codexMode = sessionState.codex.relayMode;
+      console.log(`  ${C.magenta}claude${C.reset} relay: ${modeColor(claudeMode)}${claudeMode}${C.reset}`);
+      console.log(`  ${C.green}codex${C.reset}  relay: ${modeColor(codexMode)}${codexMode}${C.reset}`);
       return;
+    }
     case 'converse': {
       startPolling();
       converseState = {
@@ -519,7 +547,8 @@ function handleInput(input) {
         ? `${parsed.prompt.trim()}\n\n${parsed.from} says:\n${response}`
         : `${parsed.from} says:\n${response}`;
       pasteToPane(PANES[parsed.to], msg);
-      console.log(`${C.blue}Relayed ${parsed.from} -> ${parsed.to}${C.reset}`);
+      const relayMode = sessionState[parsed.from].relayMode;
+      console.log(`${C.blue}Relayed ${parsed.from} -> ${parsed.to} [${relayMode}]${C.reset}`);
       return;
     }
     case 'relay_error':
@@ -561,6 +590,19 @@ if (isMain) {
   });
 
   printBanner();
+
+  // Resolve session bindings and report status
+  for (const tool of ['claude', 'codex']) {
+    resolveSessionPath(tool);
+    const mode = sessionState[tool].relayMode;
+    if (mode === 'session') {
+      console.log(`${C.green}${tool}: session-bound relay active${C.reset}`);
+    } else if (mode === 'pending') {
+      console.log(`${C.yellow}${tool}: session binding pending — will retry${C.reset}`);
+    } else {
+      console.log(`${C.yellow}${tool}: pane-capture relay (no session binding)${C.reset}`);
+    }
+  }
 
   // Auto-start watching for @mentions
   startPolling();
