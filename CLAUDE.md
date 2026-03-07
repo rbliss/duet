@@ -6,15 +6,21 @@ Duet is a tmux-based console that runs Claude Code and Codex side by side, with 
 
 ```
 duet.sh             Launcher — subcommand dispatch, run registry, tmux layout, tool launches
-router.mjs          Router — command parsing, relay dispatch, watch/converse modes, session reading
+router.mjs          Router — command parsing, relay dispatch, watch/converse modes
 bind-sessions.sh    Background binding reconciler — discovers session files, writes manifest
-test.mjs            Test suite (171 tests, 33 suites) — run with: node --test test.mjs
+src/
+  transport/tmux-client.mjs     Async tmux transport with per-pane write queues
+  relay/session-reader.mjs      Incremental JSONL session reader, response extraction
+  runtime/bindings-store.mjs    Binding manifest loader (STATE_DIR, loadBindings)
+  runtime/run-store.mjs         Run manifest updates (updateRunJson, setRunDir)
+test.mjs            Test suite (213 tests, 43 suites) — run with: node --test test.mjs
 DUET.md             System prompt injected into both tools at launch
 README.md           User-facing documentation
 docs/
   FINDINGS.md                   Architectural findings from code review (5 items, 2 resolved)
   LIVE_BINDING_DEGRADATION.md   Post-mortem on binding timing issue (resolved)
   RESUME_PLAN.md                Design doc for durable run state and session resume (completed)
+  SHORT_TERM_TRANSPORT_PLAN.md  Transport reliability plan (Phases 1-5 completed)
   1_*.md                        Iterative review/feedback passes from development
 ```
 
@@ -74,37 +80,46 @@ Node.js process providing the interactive command interface. Pure manifest consu
 **Key subsystems:**
 
 - **Command parsing** (`parseInput`): handles `@claude`, `@codex`, `@both`, `@relay`, `/converse`, `/watch`, `/stop`, `/status`, `/focus`, `/snap`, `/clear`, `/help`, `/quit`, `/detach`, `/destroy`
-- **Relay transport**: two paths depending on binding:
-  - Session-bound: `fs.watch()` on JSONL log files, debounced (200ms with completion signal, 800ms without)
-  - Pane-only: `capture-pane` polling every 1s, 2 unchanged ticks for stability
-- **Binding resolution** (`resolveSessionPath`): reads `bindings.json`, caches when all tools are final, re-reads while any tool is `pending`. On resume mode, seeks reader offset to EOF to skip history.
-- **Run manifest management** (`updateRunJson`): updates `run.json` with binding paths, session IDs, and status changes
-- **Dynamic upgrade**: tools starting as `pending` are polled via pane, then auto-upgraded to file watching when the manifest transitions to `bound`
-- **Content extraction** (`readIncremental`): incremental JSONL reader tracking byte offset per tool
+- **Relay transport** (session-only): `fs.watch()` on JSONL log files, debounced (200ms with completion signal, 800ms without). No pane-scraping fallback for automation.
+- **Binding resolution** (`resolveSessionPath` in `src/relay/session-reader.mjs`): reads `bindings.json`, caches when all tools are final, re-reads while any tool is `pending`. On resume mode, seeks reader offset to EOF to skip history.
+- **Run manifest management** (`updateRunJson` in `src/runtime/run-store.mjs`): updates `run.json` with binding paths, session IDs, and status changes
+- **Binding-refresh polling**: for tools with `pending` bindings, polls `resolveSessionPath()` periodically and starts file watching when the binding resolves. No pane polling.
+- **Content extraction** (`readIncremental` in `src/relay/session-reader.mjs`): incremental JSONL reader tracking byte offset per tool
 - **Completion detection** (`isResponseComplete`): recognizes Claude's `stop_reason: 'end_turn'` / `type: 'result'` and Codex's `payload.type: 'task_complete'`
-- **Content diffing** (`getNewContent`): prefix/suffix structural matching for pane output, handles TUI chrome (content inserted above preserved footer)
+- **Content diffing** (`getNewContent`): prefix/suffix structural matching — retained for backward compatibility but not used in automation paths
 - **Mention detection** (`detectMentions`): finds `@claude` / `@codex` in tool output for watch mode
-- **Converse mode**: multi-round turn-based relay with configurable round count, no cooldown needed (turn tracking prevents loops)
-- **Watch mode**: monitors for @mentions with 8s per-direction cooldown between auto-relays (claude→codex and codex→claude tracked independently)
+- **Converse mode**: multi-round turn-based relay with configurable round count, requires both tools bound, no cooldown needed (turn tracking prevents loops)
+- **Watch mode**: monitors session logs for @mentions with 8s per-direction cooldown between auto-relays (claude→codex and codex→claude tracked independently). Reports per-tool state (active/waiting/unavailable)
+- **Explicit binding enforcement**: `/converse` requires both tools bound; `@relay` requires source tool bound with a session response available; `/watch` reports unavailable tools
+
+**Binding repair:**
+- No automatic downgrade from session to pane relay — stale bindings are not auto-detected
+- `/rebind claude|codex` re-discovers the active session file by scanning for the newest .jsonl
+- `/rebind` is the manual repair path when a tool's session binding becomes stale (e.g., after in-tool `/resume`)
 
 **Lifecycle commands:**
 - `/quit` — stop tools, preserve run state for resume, mark as `stopped`
 - `/detach` — detach tmux client, tools keep running
 - `/destroy` — stop tools, remove all persistent state
 
-**Exported functions** (used by tests): `shellEscape`, `parseInput`, `sendKeys`, `capturePane`, `pasteToPane`, `focusPane`, `getNewContent`, `detectMentions`, `resolveSessionPath`, `setStateDir`, `setDuetMode`, `setRunDir`, `readIncremental`, `isResponseComplete`, `updateRunJson`
+**Exported functions** (used by tests):
+- From `router.mjs` (re-exports + router-specific): `shellEscape`, `parseInput`, `sendKeys`, `capturePane`, `pasteToPane`, `focusPane`, `getNewContent`, `detectMentions`, `resolveSessionPath`, `setStateDir`, `setDuetMode`, `setRunDir`, `readIncremental`, `isResponseComplete`, `updateRunJson`, `handleNewOutput`, `lastAutoRelayTime`, `downgradeToPane` (no-op), `findRebindCandidate`, `rebindTool`, `stopFileWatchers`
+- From `src/transport/tmux-client.mjs`: `shellEscape`, `sendKeys`, `capturePane`, `pasteToPane`, `focusPane`, `killSession`, `detachClient`, `displayMessage`
+- From `src/relay/session-reader.mjs`: `sessionState`, `resolveSessionPath`, `readIncremental`, `extractClaudeResponse`, `extractCodexResponse`, `isResponseComplete`, `getLastResponse`, `setDuetMode`
+- From `src/runtime/bindings-store.mjs`: `STATE_DIR`, `setStateDir`, `loadBindings`
+- From `src/runtime/run-store.mjs`: `updateRunJson`, `setRunDir`
 
 ## Key design decisions
 
 1. **Single binding authority**: `bind-sessions.sh` owns all session discovery. The router only consumes the manifest. This avoids split-authority bugs where two components race to find session files.
 
-2. **Event-driven relay for bound tools**: `fs.watch()` on session logs gives sub-second relay latency vs the ~6s that polling required. Pane polling is the fallback, not the default.
+2. **Session-only automation**: `fs.watch()` on session logs gives sub-second relay latency with authoritative, structured output. Automation paths (`/converse`, `/watch`, `@relay`) require session bindings — there is no pane-scraping fallback. `capture-pane` is used only for diagnostics (`/snap`).
 
-3. **Prefix/suffix diffing**: Claude Code's TUI inserts new content above a preserved footer. Simple tail-matching misses this. The `getNewContent` algorithm matches common prefix and suffix lines, extracting the inserted middle.
+3. **Prefix/suffix diffing**: The `getNewContent` algorithm matches common prefix and suffix lines, extracting inserted content. Retained for backward compatibility but not used in automation paths.
 
 4. **CODEX_HOME isolation**: Each run gets its own Codex home directory with only read-only config symlinked from `~/.codex/`. Mutable state (sessions, SQLite DBs) is never shared. This gives process-level binding certainty.
 
-5. **Graceful degradation**: If session binding fails, the router falls back to pane capture. The system always works — binding just determines relay quality (authoritative JSONL vs screen scraping).
+5. **Explicit binding enforcement**: If session binding fails (tool marked `degraded`), automation commands report the tool as unavailable rather than silently falling back to pane scraping. `/rebind` is the manual repair path.
 
 6. **Durable run state**: Run metadata lives under `~/.local/state/duet/`, not `/tmp`. Each run persists exact session IDs, binding paths, and a durable `CODEX_HOME`. This enables true resume where both Claude and Codex continue their prior conversations.
 
@@ -133,8 +148,11 @@ Key test patterns:
 ### Unresolved findings (from docs/FINDINGS.md)
 
 3. **Codex launch-time instructions are thin** — DUET.md is a flat prompt, not structured skills. Could be modeled as a Codex profile + skill bundle.
-4. **Router blocks on sync tmux calls** — `execSync` for send-keys/capture-pane freezes the event loop. Should be async with delivery queues.
 5. **Launch command construction is brittle** — shell string building for complex launch commands. Should separate policy from shell mechanics.
+
+### Resolved findings
+
+4. **Router blocks on sync tmux calls** — resolved: `src/transport/tmux-client.mjs` provides async transport with per-pane write queues.
 
 ## Common workflows
 
@@ -152,4 +170,4 @@ Key test patterns:
 
 **Debug binding**: Check `~/.local/state/duet/runs/<run-id>/bindings.json` for current binding state
 
-**Debug relay**: The router logs transport mode per tool at startup and on dynamic upgrades. Look for lines like `claude: session relay via /path/to/file.jsonl` or `codex: binding timed out — using pane relay`
+**Debug relay**: The router logs binding state per tool at startup and on transitions. Look for lines like `claude: binding pending — automation will start when bound` or `codex: binding degraded — automation unavailable`. Use `/status` to see current binding and automation state for each tool.

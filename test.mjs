@@ -2387,27 +2387,24 @@ describe('stale binding detection', () => {
     assert.ok('staleDowngraded' in sessionState.codex);
   });
 
-  it('downgradeToPane sets relayMode to pane and marks staleDowngraded', () => {
+  it('downgradeToPane is a no-op that does not change transport', () => {
     const origMode = sessionState.claude.relayMode;
-    const origStale = sessionState.claude.staleDowngraded;
     sessionState.claude.relayMode = 'session';
-    sessionState.claude.staleDowngraded = false;
 
     downgradeToPane('claude', 'test reason');
 
-    assert.equal(sessionState.claude.relayMode, 'pane');
-    assert.equal(sessionState.claude.staleDowngraded, true);
+    // relayMode should NOT change — downgradeToPane is a no-op now
+    assert.equal(sessionState.claude.relayMode, 'session');
 
     // Restore
     sessionState.claude.relayMode = origMode;
-    sessionState.claude.staleDowngraded = origStale;
   });
 
-  it('/status output indicates stale downgrade', () => {
+  it('/rebind is the supported repair path for stale bindings', () => {
     const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
-    assert.ok(src.includes('staleDowngraded'));
-    assert.ok(src.includes('stale session binding'));
-    assert.ok(src.includes('possible manual /resume'));
+    assert.ok(src.includes('/rebind'));
+    assert.ok(src.includes('rebindTool'));
+    assert.ok(src.includes('findRebindCandidate'));
   });
 });
 
@@ -2530,5 +2527,149 @@ describe('help text includes /rebind', () => {
     const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
     assert.ok(src.includes('/rebind claude|codex'));
     assert.ok(src.includes('Re-discover session'));
+  });
+});
+
+// ─── Phase 3-5: session-only automation, explicit binding, no pane fallback ──
+
+describe('session-only automation', () => {
+  it('router no longer uses capture-pane for automation relay', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    // capturePane call sites (not imports/exports/comments) should only be in /snap
+    const lines = src.split('\n');
+    const callLines = lines.filter(l => {
+      const trimmed = l.trim();
+      return trimmed.includes('capturePane(') &&
+        !trimmed.startsWith('import') && !trimmed.startsWith('export') &&
+        !trimmed.startsWith('//');
+    });
+    for (const line of callLines) {
+      assert.ok(
+        line.includes('parsed.target') || line.includes('parsed.lines'),
+        `capturePane called outside /snap: ${line.trim()}`
+      );
+    }
+  });
+
+  it('router no longer uses getNewContent or cleanCapture in automation paths', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    // getNewContent and cleanCapture should be defined (for export) but never called
+    // in handleNewOutput, triggerSessionRelay, pollPanes, or getCleanResponse
+    assert.ok(!src.includes('getCleanResponse'), 'getCleanResponse should be removed');
+    // getNewContent is exported for tests but not used in automation
+    const automationBlock = src.slice(
+      src.indexOf('async function handleNewOutput'),
+      src.indexOf('// ─── Input parsing')
+    );
+    assert.ok(!automationBlock.includes('getNewContent'), 'getNewContent should not be used in automation');
+    assert.ok(!automationBlock.includes('cleanCapture'), 'cleanCapture should not be used in automation');
+  });
+
+  it('handleNewOutput uses session response, not pane capture', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const handleBlock = src.slice(
+      src.indexOf('async function handleNewOutput'),
+      src.indexOf('// ─── Input parsing')
+    );
+    assert.ok(handleBlock.includes('getSessionResponse'), 'should use getSessionResponse');
+    assert.ok(!handleBlock.includes('capturePane'), 'should not use capturePane');
+  });
+});
+
+describe('explicit binding enforcement', () => {
+  it('/converse requires both tools to be bound', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const converseBlock = src.slice(
+      src.indexOf("case 'converse':"),
+      src.indexOf("case 'converse':") + 800
+    );
+    assert.ok(converseBlock.includes('both tools must be session-bound'),
+      '/converse should check that both tools are bound');
+  });
+
+  it('@relay requires source to be bound', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const relayBlock = src.slice(
+      src.indexOf("case 'relay':"),
+      src.indexOf("case 'relay':") + 600
+    );
+    assert.ok(relayBlock.includes('not session-bound'),
+      '@relay should check source binding');
+  });
+
+  it('@relay uses getSessionResponse only (no pane fallback)', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const relayBlock = src.slice(
+      src.indexOf("case 'relay':"),
+      src.indexOf("case 'relay':") + 600
+    );
+    assert.ok(relayBlock.includes('getSessionResponse'),
+      '@relay should use getSessionResponse');
+    assert.ok(!relayBlock.includes('capturePane'),
+      '@relay should not use capturePane');
+  });
+
+  it('@relay errors when no structured response available', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const relayBlock = src.slice(
+      src.indexOf("case 'relay':"),
+      src.indexOf("case 'relay':") + 600
+    );
+    assert.ok(relayBlock.includes('No structured response available'),
+      '@relay should show error when no response available');
+  });
+});
+
+describe('/watch and /status messaging', () => {
+  it('/watch reports per-tool binding status', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const watchBlock = src.slice(
+      src.indexOf("case 'watch':"),
+      src.indexOf("case 'watch':") + 1200
+    );
+    assert.ok(watchBlock.includes('bindingStatus'), '/watch should check binding status');
+    assert.ok(watchBlock.includes('active'), '/watch should report active for bound');
+    assert.ok(watchBlock.includes('waiting'), '/watch should report waiting for pending');
+    assert.ok(watchBlock.includes('unavailable'), '/watch should report unavailable for degraded');
+  });
+
+  it('/status shows binding state and automation availability', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const statusBlock = src.slice(
+      src.indexOf("case 'status':"),
+      src.indexOf("case 'status':") + 1200
+    );
+    assert.ok(statusBlock.includes('bindingStatus'), '/status should show binding status');
+    assert.ok(statusBlock.includes('automation:'), '/status should show automation state');
+  });
+
+  it('no stale auto-downgrade remains', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    // downgradeToPane should be a no-op — no relayMode mutation
+    const dgBlock = src.slice(
+      src.indexOf('export function downgradeToPane'),
+      src.indexOf('export function downgradeToPane') + 300
+    );
+    assert.ok(!dgBlock.includes("st.relayMode = 'pane'"), 'downgradeToPane should not change relayMode');
+    assert.ok(!dgBlock.includes('staleDowngraded = true'), 'downgradeToPane should not set staleDowngraded');
+    // No pane-based stale detection in the codebase
+    assert.ok(!src.includes('STALE_BINDING_MS'), 'No stale binding constant should remain');
+    assert.ok(!src.includes('PANE_STABLE_TICKS'), 'No pane stable ticks constant should remain');
+  });
+
+  it('capturePane is only used for /snap diagnostic', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    // Find all capturePane calls (excluding imports/exports)
+    const lines = src.split('\n');
+    const usageLines = lines.filter(l =>
+      l.includes('capturePane(') && !l.includes('import') && !l.includes('export'));
+    // Should only be in /snap handler
+    assert.ok(usageLines.length > 0, 'capturePane should still exist for /snap');
+    for (const line of usageLines) {
+      assert.ok(
+        line.includes('parsed.target') || line.includes('parsed.lines'),
+        `capturePane used outside /snap: ${line.trim()}`
+      );
+    }
   });
 });

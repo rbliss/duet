@@ -45,9 +45,11 @@ This opens a tmux session with three panes: Claude Code (top-left), Codex (top-r
 
 | Command | Description |
 |---|---|
-| `@relay claude>codex` | Capture Claude's screen output and send it to Codex |
-| `@relay codex>claude` | Capture Codex's screen output and send it to Claude |
+| `@relay claude>codex` | Send Claude's last response to Codex |
+| `@relay codex>claude` | Send Codex's last response to Claude |
 | `@relay claude>codex <prompt>` | Same, but prepend a custom prompt |
+
+Relay reads the source tool's structured session log (JSONL) to extract the last response. The source tool must have an active session binding.
 
 ```
 duet> @claude analyze the error handling in src/auth.ts
@@ -75,7 +77,7 @@ duet> /status
 duet> /stop
 ```
 
-**Watch mode** monitors both panes for `@mentions`. When Claude includes `@codex` in its output, the router automatically captures and relays it -- and vice versa. This lets them organically pull each other into the conversation.
+**Watch mode** monitors session logs for `@mentions`. When Claude includes `@codex` in its output, the router automatically relays it -- and vice versa. This lets them organically pull each other into the conversation. Watch mode requires session bindings; tools with pending bindings are reported as waiting (and auto-activate when bound), while degraded tools are reported as unavailable.
 
 | Command | Description |
 |---|---|
@@ -100,6 +102,7 @@ Both tools are told they can `@mention` the other. An 8-second per-direction coo
 | `/focus codex` | Switch keyboard focus to the Codex pane |
 | `/snap claude [n]` | Print the last *n* lines from Claude's pane (default 40) |
 | `/snap codex [n]` | Print the last *n* lines from Codex's pane (default 40) |
+| `/rebind claude\|codex` | Re-discover session file after manual `/resume` |
 | `/clear` | Clear the router screen |
 | `/help` | Show command reference |
 | `/quit` | Kill the session and exit |
@@ -141,15 +144,12 @@ router.mjs       Router — parses commands, dispatches via tmux, watches for @m
 The router communicates with tool panes through tmux primitives:
 
 - **send-keys** sends typed text to a pane (as if you typed it)
-- **capture-pane** reads visible text from a pane (used by `/snap`, `@relay`, pane polling)
-- **paste-buffer** pastes multiline text into a pane (used by `@relay` and auto-relay)
+- **capture-pane** reads visible text from a pane (used by `/snap` only — diagnostic, not automation)
+- **paste-buffer** pastes multiline text into a pane (used for relay delivery)
 
-For watch and converse modes, the router uses two relay paths depending on session binding:
+Automation (watch, converse, `@relay`) uses **session-only relay**: `fs.watch()` on the JSONL session log file. New content triggers a relay after a short debounce (200ms with a completion signal, 800ms otherwise). This gives sub-second latency with authoritative, structured output.
 
-1. **Session-bound (event-driven)**: Uses `fs.watch()` on the session log file. New JSONL content triggers a relay after a short debounce (200ms with a completion signal, 800ms otherwise). This is the fast path — sub-second latency.
-2. **Pane-only (polling)**: Polls `capture-pane` every 1 second. After 2 unchanged polls (~2s), output is considered stable and relayed. Used when session binding is unavailable.
-
-Tools that start with pending bindings are polled via pane and auto-upgraded to file watching once their binding resolves. The 8-second cooldown is per-direction, so a claude→codex relay does not block an immediate codex→claude reply. In converse mode, the cooldown is bypassed entirely since turn tracking already prevents loops.
+Tools with pending bindings are polled at the binding level (not pane level) — the router periodically checks whether `bindings.json` has transitioned from `pending` to `bound`, then starts file watching. The 8-second cooldown is per-direction, so a claude→codex relay does not block an immediate codex→claude reply. In converse mode, the cooldown is bypassed entirely since turn tracking already prevents loops.
 
 Both CLIs run as full interactive processes in their own pseudo-terminals. Duet does not use the APIs -- it wraps the actual CLI tools, preserving all native features.
 
@@ -159,11 +159,11 @@ Both CLIs run as full interactive processes in their own pseudo-terminals. Duet 
 cd ~/duet && node --test test.mjs
 ```
 
-135 tests across 20 suites: shell escaping, input parsing (including converse/watch/stop), content diffing (`getNewContent` including inserted-above-footer regression), @mention detection (`detectMentions`), tmux integration (sendKeys, capturePane, pasteToPane, focusPane, cross-pane relay), launcher layout, response extraction (Claude and Codex formats), completion detection (`isResponseComplete`), incremental session reader, end-to-end session binding (bindings.json manifest), binding lifecycle (manifest caching and re-reads), launcher binding contract (bind-sessions.sh with fallback coverage), and edge cases. Integration tests run against real tmux sessions.
+213 tests across 43 suites: shell escaping, input parsing (including converse/watch/stop), content diffing (`getNewContent`), @mention detection (`detectMentions`), tmux integration (sendKeys, capturePane, pasteToPane, focusPane, cross-pane relay), launcher layout, response extraction (Claude and Codex formats), completion detection (`isResponseComplete`), incremental session reader, end-to-end session binding (bindings.json manifest), binding lifecycle (manifest caching and re-reads), launcher binding contract (bind-sessions.sh with fallback coverage), session-only automation enforcement, explicit binding enforcement, watch/status messaging, and edge cases. Integration tests run against real tmux sessions.
 
 ## Known limitations
 
-- **Relay fidelity**: `@relay` and auto-relay capture the rendered terminal output, which includes prompts, borders, and TUI chrome. The receiving tool sees this as-is -- readable but not pristine.
+- **Session binding required for automation**: `/converse`, `/watch`, and `@relay` require active session bindings. If binding fails (tool marked as `degraded`), these commands report the tool as unavailable. Use `/status` to check binding state.
 - **Single-line input**: `@claude` and `@codex` send a single line. For multi-line prompts, use `/focus` to interact natively.
-- **Stability detection**: For pane-only tools (no session binding), the router waits ~2 seconds of unchanged output to consider a response "done." Fast follow-up outputs within that window are batched; very long pauses mid-response may trigger a premature relay.
+- **In-tool `/resume`**: Using Claude's built-in `/resume` command inside a live Duet session invalidates the router's session binding. Use `/rebind claude` to re-discover the new session file, or prefer `duet.sh resume` / `duet.sh fork` instead.
 - **tmux 3.4**: The `split-window -p` (percentage) flag fails on detached sessions. Duet uses `-l` (absolute lines/columns) as a workaround.

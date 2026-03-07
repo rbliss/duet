@@ -1,5 +1,5 @@
 import { createInterface } from 'readline';
-import { writeFileSync, readFileSync, rmSync, statSync, readdirSync, watch } from 'fs';
+import { rmSync, statSync, readdirSync, watch } from 'fs';
 import { join } from 'path';
 
 // ─── Module imports ──────────────────────────────────────────────────────────
@@ -110,30 +110,30 @@ export function cleanCapture(text) {
 
 // ─── Watch / converse state ──────────────────────────────────────────────────
 
-const PANE_POLL_MS = 1000;
-const PANE_STABLE_TICKS = 2;
+const BINDING_POLL_MS = 1000;    // poll interval for pending binding resolution
 const SESSION_DEBOUNCE_MS = 800;
 const SESSION_COMPLETE_MS = 200;
 const RELAY_COOLDOWN_MS = 8000;
-const STALE_BINDING_MS = 5000;
 
 let rl = null;
 let watchInterval = null;
 export const lastAutoRelayTime = {};
 let converseState = null;
 
-const watchState = {
-  claude: { baseline: '', lastSeen: '', unchangedCount: 0 },
-  codex:  { baseline: '', lastSeen: '', unchangedCount: 0 },
-};
-
 const fileWatchers = {};
 const fileDebounceTimers = {};
-let panePolledTools = new Set();
 
 export function isWatching() { return watchInterval !== null; }
 
 function prompt() { if (rl) rl.prompt(); }
+
+// Return binding state summary for user-facing messages
+function bindingStatus(tool) {
+  const st = sessionState[tool];
+  if (st.relayMode === 'session') return 'bound';
+  if (st.relayMode === 'pending') return 'pending';
+  return 'degraded';
+}
 
 // ─── File watcher functions (session-bound event-driven relay) ───────────────
 
@@ -152,7 +152,6 @@ function startFileWatcher(tool) {
     });
     fileWatchers[tool].on('error', () => {
       stopFileWatcher(tool);
-      panePolledTools.add(tool);
     });
     return true;
   } catch {
@@ -189,70 +188,72 @@ async function triggerSessionRelay(tool) {
   const st = sessionState[tool];
   if (!st.lastResponse) return;
   await handleNewOutput(tool, st.lastResponse);
-  // Sync pane baseline to prevent duplicate relay on fallback to pane polling
-  if (PANES[tool]) {
-    try {
-      const cap = (await capturePane(PANES[tool], 80)).trim();
-      watchState[tool] = { baseline: cap, lastSeen: cap, unchangedCount: 0 };
-    } catch {}
-  }
 }
 
 // ─── Polling start / stop ────────────────────────────────────────────────────
 
-let pollTimer = null;
+let bindingPollTimer = null;
 
-async function initBaselines() {
-  for (const name of ['claude', 'codex']) {
-    if (PANES[name]) {
-      const cap = (await capturePane(PANES[name], 80)).trim();
-      watchState[name] = { baseline: cap, lastSeen: cap, unchangedCount: 0 };
+// Pending tools that need binding resolution polling
+let pendingTools = new Set();
+
+function scheduleBindingPoll() {
+  if (!watchInterval || pendingTools.size === 0) return;
+  bindingPollTimer = setTimeout(() => {
+    pollBindings();
+    scheduleBindingPoll();
+  }, BINDING_POLL_MS);
+}
+
+function pollBindings() {
+  for (const name of [...pendingTools]) {
+    resolveSessionPath(name);
+    const st = sessionState[name];
+    if (st.relayMode === 'session' && st.path) {
+      if (startFileWatcher(name)) {
+        pendingTools.delete(name);
+        console.log(`\n${C.green}${name}: binding resolved — session log watcher active${C.reset}`);
+        prompt();
+      }
+    } else if (st.relayMode === 'pane') {
+      // degraded — binding failed
+      pendingTools.delete(name);
+      console.log(`\n${C.yellow}${name}: binding degraded — automation unavailable${C.reset}`);
+      prompt();
     }
   }
 }
 
-function schedulePoll() {
-  if (!watchInterval) return;
-  pollTimer = setTimeout(async () => {
-    await pollPanes();
-    schedulePoll();
-  }, PANE_POLL_MS);
-}
-
-async function startPolling() {
+function startPolling() {
   if (watchInterval) return;
-  panePolledTools = new Set();
+  pendingTools = new Set();
   for (const name of ['claude', 'codex']) {
     resolveSessionPath(name);
     const st = sessionState[name];
     if (st.relayMode === 'session' && st.path && startFileWatcher(name)) {
       // event-driven relay via session log
-    } else {
-      panePolledTools.add(name);
+    } else if (st.relayMode === 'pending') {
+      pendingTools.add(name);
     }
+    // degraded tools are not added — automation is unavailable for them
   }
-  // Initialize pane baseline before first poll (sentinel for stale detection)
-  await initBaselines();
-  watchInterval = true; // flag: polling is active
-  schedulePoll();
+  watchInterval = true; // flag: watching is active
+  scheduleBindingPoll();
 }
 
 function stopPolling() {
   watchInterval = null;
-  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  if (bindingPollTimer) { clearTimeout(bindingPollTimer); bindingPollTimer = null; }
   converseState = null;
   stopFileWatchers();
-  panePolledTools = new Set();
+  pendingTools = new Set();
 }
 
-// Downgrade a tool from session-bound to pane relay (e.g. stale binding)
+// downgradeToPane is removed — stale binding is a status note, not an automatic fallback.
+// Use /rebind to manually re-discover a session file.
 export function downgradeToPane(tool, reason) {
-  stopFileWatcher(tool);
-  const st = sessionState[tool];
-  st.relayMode = 'pane';
-  st.staleDowngraded = true;
-  panePolledTools.add(tool);
-  console.log(`\n${C.yellow}${tool}: ${reason} — falling back to pane relay${C.reset}`);
+  // No-op: retained as export for test backward compat but no longer changes transport.
+  console.log(`\n${C.yellow}${tool}: ${reason} — use /rebind ${tool} to re-discover session${C.reset}`);
   prompt();
 }
 
@@ -304,14 +305,7 @@ export async function rebindTool(tool, newPath) {
   const newSid = match ? match[1] : null;
 
   if (startFileWatcher(tool)) {
-    panePolledTools.delete(tool);
-  }
-
-  if (PANES[tool]) {
-    try {
-      const cap = (await capturePane(PANES[tool], 80)).trim();
-      watchState[tool] = { baseline: cap, lastSeen: cap, unchangedCount: 0 };
-    } catch {}
+    pendingTools.delete(tool);
   }
 
   const updates = { [`${tool}.binding_path`]: newPath, updated_at: new Date().toISOString() };
@@ -321,83 +315,10 @@ export async function rebindTool(tool, newPath) {
   return { oldPath, newPath, newSid };
 }
 
-async function pollPanes() {
-  // Dynamic upgrade: check if any pending tools have resolved to session-bound
-  for (const name of [...panePolledTools]) {
-    if (sessionState[name].relayMode === 'pending') {
-      resolveSessionPath(name);
-      if (sessionState[name].relayMode === 'session' && sessionState[name].path) {
-        if (startFileWatcher(name)) {
-          panePolledTools.delete(name);
-          console.log(`\n${C.green}${name}: upgraded to session log watcher${C.reset}`);
-          prompt();
-        }
-      } else if (sessionState[name].relayMode === 'pane') {
-        console.log(`\n${C.yellow}${name}: binding timed out — using pane relay${C.reset}`);
-        prompt();
-      }
-    }
-  }
-
-  // Stale-binding sentinel: poll Claude pane to detect binding divergence.
-  for (const name of ['claude']) {
-    if (!fileWatchers[name] || !PANES[name]) continue;
-    const state = watchState[name];
-    if (!state) continue;
-    const current = (await capturePane(PANES[name], 80)).trim();
-
-    if (current === state.lastSeen) {
-      state.unchangedCount++;
-      if (state.unchangedCount === PANE_STABLE_TICKS && current !== state.baseline) {
-        const paneNew = getNewContent(state.baseline, current);
-        state.baseline = current;
-        state.unchangedCount = 0;
-        if (paneNew) {
-          const st = sessionState[name];
-          const sessionCold = Date.now() - st.lastSessionActivityAt > STALE_BINDING_MS;
-          if (sessionCold) {
-            try {
-              const { mtimeMs } = statSync(st.path);
-              if (Date.now() - mtimeMs <= STALE_BINDING_MS) continue;
-            } catch {}
-            downgradeToPane(name, 'session binding appears stale (possible manual /resume)');
-            await handleNewOutput(name, paneNew);
-          }
-        }
-      }
-    } else {
-      state.lastSeen = current;
-      state.unchangedCount = 0;
-    }
-  }
-
-  for (const name of panePolledTools) {
-    const state = watchState[name];
-    const current = (await capturePane(PANES[name], 80)).trim();
-
-    if (current === state.lastSeen) {
-      state.unchangedCount++;
-
-      if (state.unchangedCount === PANE_STABLE_TICKS && current !== state.baseline) {
-        const newContent = getNewContent(state.baseline, current);
-        state.baseline = current;
-        state.unchangedCount = 0;
-
-        if (newContent) await handleNewOutput(name, newContent);
-      }
-    } else {
-      state.lastSeen = current;
-      state.unchangedCount = 0;
-    }
-  }
-}
-
-// Returns { text, via } where via is 'session' or 'pane'.
-function getCleanResponse(source, fallbackContent) {
-  const logResponse = getLastResponse(source);
-  if (logResponse && logResponse.length > 10) return { text: logResponse, via: 'session' };
-  const text = cleanCapture(fallbackContent) || fallbackContent;
-  return { text, via: 'pane' };
+// Get the latest structured session response for a tool, or null if unavailable
+function getSessionResponse(tool) {
+  const logResponse = getLastResponse(tool);
+  return (logResponse && logResponse.length > 0) ? logResponse : null;
 }
 
 export async function handleNewOutput(source, newContent) {
@@ -416,8 +337,8 @@ export async function handleNewOutput(source, newContent) {
 
     const direction = `${source}->${other}`;
     lastAutoRelayTime[direction] = now;
-    const { text: response, via } = getCleanResponse(source, newContent);
-    console.log(`\n${C.blue}[converse|${via}] round ${converseState.rounds}/${converseState.maxRounds}: ${source} -> ${other}${C.reset}`);
+    const response = getSessionResponse(source) || newContent;
+    console.log(`\n${C.blue}[converse] round ${converseState.rounds}/${converseState.maxRounds}: ${source} -> ${other}${C.reset}`);
     const msg = `${source} says (round ${converseState.rounds} on "${converseState.topic}"):\n${response}`;
     await pasteToPane(PANES[other], msg);
     converseState.turn = other;
@@ -434,8 +355,8 @@ export async function handleNewOutput(source, newContent) {
 
   if (mentionsOther) {
     lastAutoRelayTime[direction] = now;
-    const { text: response, via } = getCleanResponse(source, newContent);
-    console.log(`\n${C.blue}[auto|${via}] ${source} mentioned @${other} — relaying${C.reset}`);
+    const response = getSessionResponse(source) || newContent;
+    console.log(`\n${C.blue}[auto] ${source} mentioned @${other} — relaying${C.reset}`);
     const msg = `${source} says:\n${response}`;
     await pasteToPane(PANES[other], msg);
     prompt();
@@ -569,11 +490,22 @@ async function handleInput(input) {
     case 'clear':
       process.stdout.write('\x1b[2J\x1b[H');
       return;
-    case 'watch':
-      await startPolling();
+    case 'watch': {
+      startPolling();
       console.log(`${C.cyan}Watching for @mentions — tools can now talk to each other${C.reset}`);
-      console.log(`${C.dim}Either tool can include @claude or @codex in its output to trigger a relay.${C.reset}`);
+      for (const tool of ['claude', 'codex']) {
+        const bs = bindingStatus(tool);
+        const color = tool === 'claude' ? C.magenta : C.green;
+        if (bs === 'bound') {
+          console.log(`  ${color}${tool}${C.reset}: ${C.green}active${C.reset} (session-bound)`);
+        } else if (bs === 'pending') {
+          console.log(`  ${color}${tool}${C.reset}: ${C.yellow}waiting${C.reset} (binding pending)`);
+        } else {
+          console.log(`  ${color}${tool}${C.reset}: ${C.red}unavailable${C.reset} (binding degraded)`);
+        }
+      }
       return;
+    }
     case 'stop':
       if (isWatching()) {
         stopPolling();
@@ -590,15 +522,16 @@ async function handleInput(input) {
       } else {
         console.log(`${C.dim}Idle — not watching${C.reset}`);
       }
-      const modeColor = (m) => m === 'session' ? C.green : m === 'pane' ? C.yellow : C.dim;
       for (const tool of ['claude', 'codex']) {
         const st = sessionState[tool];
+        const bs = bindingStatus(tool);
         const color = tool === 'claude' ? C.magenta : C.green;
         const pad = tool === 'claude' ? '' : ' ';
         const level = st.bindingLevel ? ` (${st.bindingLevel})` : '';
-        const transport = fileWatchers[tool] ? ', event-driven' : panePolledTools.has(tool) ? ', polling' : '';
-        const staleNote = st.staleDowngraded ? ` ${C.red}(stale session binding; possible manual /resume)${C.reset}` : '';
-        console.log(`  ${color}${tool}${C.reset}${pad} relay: ${modeColor(st.relayMode)}${st.relayMode}${level}${transport}${C.reset}${staleNote}`);
+        const watching = fileWatchers[tool] ? ', watching' : pendingTools.has(tool) ? ', polling binding' : '';
+        const bsColor = bs === 'bound' ? C.green : bs === 'pending' ? C.yellow : C.red;
+        const autoLabel = bs === 'bound' ? 'active' : bs === 'pending' ? 'waiting' : 'unavailable';
+        console.log(`  ${color}${tool}${C.reset}${pad} binding: ${bsColor}${bs}${level}${C.reset}  automation: ${bsColor}${autoLabel}${watching}${C.reset}`);
       }
       return;
     }
@@ -610,7 +543,7 @@ async function handleInput(input) {
       const tool = parsed.target;
       const candidate = findRebindCandidate(tool);
       if (!candidate) {
-        console.log(`${C.red}No rebind candidate found for ${tool} — staying on pane relay${C.reset}`);
+        console.log(`${C.red}No rebind candidate found for ${tool} — current binding unchanged${C.reset}`);
         return;
       }
       const { oldPath, newPath, newSid } = await rebindTool(tool, candidate);
@@ -621,7 +554,17 @@ async function handleInput(input) {
       return;
     }
     case 'converse': {
-      await startPolling();
+      // Resolve latest binding state
+      for (const t of ['claude', 'codex']) resolveSessionPath(t);
+      const cbs = bindingStatus('claude');
+      const xbs = bindingStatus('codex');
+      if (cbs !== 'bound' || xbs !== 'bound') {
+        console.log(`${C.red}Cannot start conversation — both tools must be session-bound${C.reset}`);
+        if (cbs !== 'bound') console.log(`  ${C.magenta}claude${C.reset}: ${C.red}${cbs}${C.reset}`);
+        if (xbs !== 'bound') console.log(`  ${C.green}codex${C.reset}:  ${C.red}${xbs}${C.reset}`);
+        return;
+      }
+      startPolling();
       converseState = {
         turn: 'claude',
         rounds: 0,
@@ -652,17 +595,21 @@ async function handleInput(input) {
       }
       return;
     case 'relay': {
-      const raw = (await capturePane(PANES[parsed.from], 80)).trim();
-      const { text: response, via } = getCleanResponse(parsed.from, raw);
+      const fromBs = bindingStatus(parsed.from);
+      if (fromBs !== 'bound') {
+        console.log(`${C.red}Cannot relay — ${parsed.from} is not session-bound (${fromBs})${C.reset}`);
+        return;
+      }
+      const response = getSessionResponse(parsed.from);
       if (!response) {
-        console.log(`${C.red}Nothing captured from ${parsed.from}${C.reset}`);
+        console.log(`${C.red}No structured response available from ${parsed.from} — nothing to relay${C.reset}`);
         return;
       }
       const msg = parsed.prompt
         ? `${parsed.prompt.trim()}\n\n${parsed.from} says:\n${response}`
         : `${parsed.from} says:\n${response}`;
       await pasteToPane(PANES[parsed.to], msg);
-      console.log(`${C.blue}Relayed ${parsed.from} -> ${parsed.to} [${via}]${C.reset}`);
+      console.log(`${C.blue}Relayed ${parsed.from} -> ${parsed.to}${C.reset}`);
       return;
     }
     case 'relay_error':
@@ -713,23 +660,23 @@ if (isMain) {
     console.log(`${C.green}Forked session${C.reset}`);
   }
 
-  startPolling().then(() => {
-    for (const tool of ['claude', 'codex']) {
-      const st = sessionState[tool];
-      if (st.relayMode === 'session') {
-        const level = st.bindingLevel ? ` [${st.bindingLevel}]` : '';
-        const transport = fileWatchers[tool] ? ' (event-driven)' : '';
-        console.log(`${C.green}${tool}: session-bound relay active${level}${transport}${C.reset}`);
-      } else if (st.relayMode === 'pending') {
-        console.log(`${C.yellow}${tool}: binding pending — will upgrade when available${C.reset}`);
-      } else {
-        console.log(`${C.yellow}${tool}: pane-capture relay (binding failed)${C.reset}`);
-      }
-    }
-    console.log(`${C.cyan}Watching for @mentions — tools can talk to each other${C.reset}\n`);
+  startPolling();
 
-    rl.prompt();
-  });
+  for (const tool of ['claude', 'codex']) {
+    const bs = bindingStatus(tool);
+    const st = sessionState[tool];
+    const level = st.bindingLevel ? ` [${st.bindingLevel}]` : '';
+    if (bs === 'bound') {
+      console.log(`${C.green}${tool}: session-bound — automation active${level}${C.reset}`);
+    } else if (bs === 'pending') {
+      console.log(`${C.yellow}${tool}: binding pending — automation will start when bound${C.reset}`);
+    } else {
+      console.log(`${C.red}${tool}: binding degraded — automation unavailable${C.reset}`);
+    }
+  }
+  console.log(`${C.cyan}Watching for @mentions — tools can talk to each other${C.reset}\n`);
+
+  rl.prompt();
 
   rl.on('line', (line) => {
     handleInput(line.trim()).then(() => rl.prompt());
