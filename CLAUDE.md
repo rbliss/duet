@@ -107,13 +107,6 @@ Full design exists for durable run state, `duet resume`, `duet fork`, and `duet 
 - Add `/detach` vs `/quit` vs `/destroy` semantics
 - Initialize incremental reader at EOF on resume (not byte 0)
 
-### Uncommitted changes
-
-Three findings were implemented but not yet committed:
-1. Event-driven relay (`fs.watch` on session logs)
-2. `getNewContent` prefix/suffix fix for TUI footer pattern
-3. Live binding degradation fix (background reconciler with 120s deadline)
-
 ## Common workflows
 
 **Run tests**: `node --test test.mjs`
