@@ -514,6 +514,12 @@ describe('tmux integration', () => {
       const after = execSync('ls /tmp/duet-paste-* 2>/dev/null | wc -l', { encoding: 'utf8' }).trim();
       assert.equal(after, before, 'Temp files should be cleaned up');
     });
+
+    it('uses bracketed paste (-p) to avoid chunked paste issues', () => {
+      const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+      assert.ok(src.includes('paste-buffer -p -b duet'),
+        'pasteToPane should use paste-buffer -p for bracketed paste');
+    });
   });
 
   describe('focusPane', () => {

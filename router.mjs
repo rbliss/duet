@@ -47,7 +47,7 @@ export function pasteToPane(pane, text) {
   try {
     writeFileSync(tmp, text);
     execSync(`tmux load-buffer -b duet ${shellEscape(tmp)}`);
-    execSync(`tmux paste-buffer -b duet -t ${shellEscape(pane)}`);
+    execSync(`tmux paste-buffer -p -b duet -t ${shellEscape(pane)}`);
     // Wait for TUI to process the pasted content before submitting
     execSync('sleep 0.5');
     execSync(`tmux send-keys -t ${shellEscape(pane)} Enter`);
