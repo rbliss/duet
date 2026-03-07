@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { execSync, spawn } from 'child_process';
 import { existsSync } from 'fs';
 
-import { writeFileSync, mkdirSync, rmSync, appendFileSync } from 'fs';
+import { writeFileSync, mkdirSync, rmSync, appendFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 
-import { shellEscape, parseInput, sendKeys, capturePane, pasteToPane, focusPane, getNewContent, detectMentions, cleanCapture, extractClaudeResponse, extractCodexResponse, isResponseComplete, sessionState, getClaudeLastResponse, getCodexLastResponse, resolveSessionPath, setStateDir, setDuetMode, setRunDir, updateRunJson, readIncremental, handleNewOutput, lastAutoRelayTime } from './router.mjs';
+import { shellEscape, parseInput, sendKeys, capturePane, pasteToPane, focusPane, getNewContent, detectMentions, cleanCapture, extractClaudeResponse, extractCodexResponse, isResponseComplete, sessionState, getClaudeLastResponse, getCodexLastResponse, resolveSessionPath, setStateDir, setDuetMode, setRunDir, updateRunJson, readIncremental, handleNewOutput, lastAutoRelayTime, downgradeToPane, findRebindCandidate, rebindTool, stopFileWatchers } from './router.mjs';
 import { readFileSync } from 'fs';
 
 // ─── Unit Tests: shellEscape ─────────────────────────────────────────────────
@@ -434,130 +434,130 @@ describe('tmux integration', () => {
   });
 
   describe('sendKeys', () => {
-    it('sends text to a pane and it appears in output', () => {
-      sendKeys(paneA, 'echo DUET_TEST_MARKER_1');
+    it('sends text to a pane and it appears in output', async () => {
+      await sendKeys(paneA, 'echo DUET_TEST_MARKER_1');
       execSync('sleep 0.5');
-      const captured = capturePane(paneA, 20);
+      const captured = await capturePane(paneA, 20);
       assert.ok(captured.includes('DUET_TEST_MARKER_1'), `Expected marker in: ${captured}`);
     });
 
-    it('sends to correct pane without affecting the other', () => {
-      sendKeys(paneA, 'echo ONLY_IN_A');
+    it('sends to correct pane without affecting the other', async () => {
+      await sendKeys(paneA, 'echo ONLY_IN_A');
       execSync('sleep 0.5');
-      const capB = capturePane(paneB, 20);
+      const capB = await capturePane(paneB, 20);
       assert.ok(!capB.includes('ONLY_IN_A'), 'Text should not appear in other pane');
     });
 
-    it('handles special characters', () => {
-      sendKeys(paneA, 'echo "hello $USER \'world\'"');
+    it('handles special characters', async () => {
+      await sendKeys(paneA, 'echo "hello $USER \'world\'"');
       execSync('sleep 0.5');
-      const captured = capturePane(paneA, 20);
+      const captured = await capturePane(paneA, 20);
       assert.ok(captured.includes('hello'), `Expected output in: ${captured}`);
     });
 
-    it('returns true on success', () => {
-      const result = sendKeys(paneA, 'echo ok');
+    it('returns true on success', async () => {
+      const result = await sendKeys(paneA, 'echo ok');
       assert.equal(result, true);
     });
 
-    it('returns false for invalid pane', () => {
-      const result = sendKeys('%999', 'echo fail');
+    it('returns false for invalid pane', async () => {
+      const result = await sendKeys('%999', 'echo fail');
       assert.equal(result, false);
     });
   });
 
   describe('capturePane', () => {
-    it('captures visible text from a pane', () => {
-      sendKeys(paneA, 'echo CAPTURE_TEST_42');
+    it('captures visible text from a pane', async () => {
+      await sendKeys(paneA, 'echo CAPTURE_TEST_42');
       execSync('sleep 0.5');
-      const output = capturePane(paneA, 20);
+      const output = await capturePane(paneA, 20);
       assert.ok(output.includes('CAPTURE_TEST_42'));
     });
 
-    it('respects line count parameter', () => {
+    it('respects line count parameter', async () => {
       // Write many lines
-      sendKeys(paneA, 'for i in $(seq 1 20); do echo "LINE_$i"; done');
+      await sendKeys(paneA, 'for i in $(seq 1 20); do echo "LINE_$i"; done');
       execSync('sleep 0.8');
-      const few = capturePane(paneA, 5);
-      const many = capturePane(paneA, 50);
+      const few = await capturePane(paneA, 5);
+      const many = await capturePane(paneA, 50);
       assert.ok(many.length >= few.length);
     });
 
-    it('returns empty string for invalid pane', () => {
-      const result = capturePane('%999', 10);
+    it('returns empty string for invalid pane', async () => {
+      const result = await capturePane('%999', 10);
       assert.equal(result, '');
     });
   });
 
   describe('pasteToPane', () => {
-    it('pastes multiline text into a pane', () => {
-      pasteToPane(paneA, 'echo PASTE_LINE_ONE');
+    it('pastes multiline text into a pane', async () => {
+      await pasteToPane(paneA, 'echo PASTE_LINE_ONE');
       execSync('sleep 0.5');
-      const captured = capturePane(paneA, 20);
+      const captured = await capturePane(paneA, 20);
       assert.ok(captured.includes('PASTE_LINE_ONE'), `Expected paste in: ${captured}`);
     });
 
-    it('returns true on success', () => {
-      const result = pasteToPane(paneA, 'echo ok');
+    it('returns true on success', async () => {
+      const result = await pasteToPane(paneA, 'echo ok');
       assert.equal(result, true);
     });
 
-    it('returns false for invalid pane', () => {
-      const result = pasteToPane('%999', 'echo fail');
+    it('returns false for invalid pane', async () => {
+      const result = await pasteToPane('%999', 'echo fail');
       assert.equal(result, false);
     });
 
-    it('cleans up temp files', () => {
+    it('cleans up temp files', async () => {
       const before = execSync('ls /tmp/duet-paste-* 2>/dev/null | wc -l', { encoding: 'utf8' }).trim();
-      pasteToPane(paneA, 'echo cleanup-test');
+      await pasteToPane(paneA, 'echo cleanup-test');
       execSync('sleep 0.2');
       const after = execSync('ls /tmp/duet-paste-* 2>/dev/null | wc -l', { encoding: 'utf8' }).trim();
       assert.equal(after, before, 'Temp files should be cleaned up');
     });
 
     it('uses bracketed paste (-p) to avoid chunked paste issues', () => {
-      const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
-      assert.ok(src.includes('paste-buffer -p -b duet'),
+      const src = readFileSync('/home/claude/duet/src/transport/tmux-client.mjs', 'utf8');
+      assert.ok(src.includes('paste-buffer -p -b'),
         'pasteToPane should use paste-buffer -p for bracketed paste');
     });
   });
 
   describe('focusPane', () => {
-    it('returns true for valid pane', () => {
-      assert.equal(focusPane(paneA), true);
+    it('returns true for valid pane', async () => {
+      assert.equal(await focusPane(paneA), true);
     });
 
-    it('returns false for invalid pane', () => {
-      assert.equal(focusPane('%999'), false);
+    it('returns false for invalid pane', async () => {
+      assert.equal(await focusPane('%999'), false);
     });
 
-    it('actually changes the active pane', () => {
-      focusPane(paneA);
+    it('actually changes the active pane', async () => {
+      await focusPane(paneA);
       const active = tmux(`display-message -t ${TEST_SESSION} -p '#{pane_id}'`);
       assert.equal(active, paneA);
 
-      focusPane(paneB);
+      await focusPane(paneB);
       const active2 = tmux(`display-message -t ${TEST_SESSION} -p '#{pane_id}'`);
       assert.equal(active2, paneB);
     });
   });
 
   describe('cross-pane relay workflow', () => {
-    it('captures from one pane and sends to another', () => {
+    it('captures from one pane and sends to another', async () => {
       // Generate content in pane A
-      sendKeys(paneA, 'echo RELAY_SOURCE_CONTENT_XYZ');
+      await sendKeys(paneA, 'echo RELAY_SOURCE_CONTENT_XYZ');
       execSync('sleep 0.5');
 
       // Capture from A
-      const captured = capturePane(paneA, 30).trim();
+      const captured = (await capturePane(paneA, 30)).trim();
       assert.ok(captured.includes('RELAY_SOURCE_CONTENT_XYZ'),
         `Expected source marker in pane A: ${captured}`);
 
       // Send a command to B that proves relay worked
-      pasteToPane(paneB, 'echo "received relay"');
+      await pasteToPane(paneB, 'echo "received relay"');
       execSync('sleep 0.5');
 
-      const capB = capturePane(paneB, 20);
+      const capB = await capturePane(paneB, 20);
       assert.ok(capB.includes('received relay'), `Expected relay in pane B: ${capB}`);
     });
   });
@@ -893,8 +893,8 @@ describe('end-to-end session binding', () => {
 
   function resetSessionState() {
     setStateDir(stateDir);
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
-    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false };
   }
 
   function writeBindings(claude, codex) {
@@ -1094,7 +1094,7 @@ describe('binding lifecycle', () => {
 
   it('loadBindings re-reads manifest while tools are pending', () => {
     setStateDir(stateDir2);
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false };
 
     // Write pending manifest
     writeFileSync(join(stateDir2, 'bindings.json'), JSON.stringify({
@@ -1121,8 +1121,8 @@ describe('binding lifecycle', () => {
 
   it('stops re-reading manifest once all tools are final', () => {
     setStateDir(stateDir2);
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
-    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false };
 
     // Write all-degraded manifest (final state)
     writeFileSync(join(stateDir2, 'bindings.json'), JSON.stringify({
@@ -1476,8 +1476,8 @@ describe('EOF-seek on resume', () => {
     setStateDir(stateDir);
     setDuetMode('resumed');
     setRunDir(stateDir);
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
-    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false };
   }
 
   it('seeks reader to EOF when mode is resumed', () => {
@@ -1524,7 +1524,7 @@ describe('EOF-seek on resume', () => {
     }));
 
     setDuetMode('new');
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false };
 
     resolveSessionPath('claude');
     // offset should be 0 (no seek), and reading should pick up the content
@@ -1575,8 +1575,8 @@ describe('binding propagation to run.json', () => {
     setStateDir(stateDir);
     setDuetMode('new');
     setRunDir(stateDir);
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
-    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false };
 
     resolveSessionPath('claude');
 
@@ -1763,6 +1763,131 @@ describe('durable state directory structure', () => {
   });
 });
 
+// ─── cmd_list formatting and ordering ─────────────────────────────────────────
+
+describe('cmd_list', () => {
+  const testDir = '/tmp/duet-test-list-' + process.pid;
+  const runsDir = join(testDir, 'runs');
+
+  before(() => {
+    mkdirSync(runsDir, { recursive: true });
+  });
+
+  after(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  function createRun(id, overrides = {}) {
+    const runDir = join(runsDir, id);
+    mkdirSync(runDir, { recursive: true });
+    const data = {
+      run_id: id,
+      cwd: '/home/test/project',
+      status: 'stopped',
+      mode: 'new',
+      updated_at: '2026-03-07T01:00:00Z',
+      tmux_session: `duet-${id.slice(0, 8)}`,
+      claude: { session_id: 'claude-sid-001' },
+      codex: { session_id: 'codex-sid-001' },
+      ...overrides,
+    };
+    writeFileSync(join(runDir, 'run.json'), JSON.stringify(data, null, 2));
+    return runDir;
+  }
+
+  it('shows active runs before stopped runs', () => {
+    // Clean up any previous test runs
+    rmSync(runsDir, { recursive: true, force: true });
+    mkdirSync(runsDir, { recursive: true });
+
+    createRun('aaaaaaaa-0000-0000-0000-000000000001', {
+      status: 'stopped', updated_at: '2026-03-07T03:00:00Z',
+    });
+    createRun('bbbbbbbb-0000-0000-0000-000000000002', {
+      status: 'active', updated_at: '2026-03-07T01:00:00Z',
+    });
+
+    const pyScript = join(testDir, 'list_order.py');
+    writeFileSync(pyScript, `
+import json, pathlib, sys
+runs_dir = pathlib.Path(sys.argv[1])
+runs = []
+for rj in runs_dir.glob("*/run.json"):
+    try: data = json.load(open(rj))
+    except: continue
+    rid = data.get("run_id", "?")
+    status = data.get("status", "?")
+    updated = data.get("updated_at", "?")
+    runs.append({"short": rid[:8], "status": status, "updated": updated})
+active = [r for r in runs if r["status"] == "active"]
+rest = [r for r in runs if r["status"] != "active"]
+active.sort(key=lambda r: r["updated"], reverse=True)
+rest.sort(key=lambda r: r["updated"], reverse=True)
+runs = active + rest
+for run in runs:
+    print(f"{run['short']}  {run['status']}")
+`);
+
+    const output = execSync(`python3 ${pyScript} ${runsDir}`, { encoding: 'utf8' }).trim();
+    const lines = output.split('\n').map(l => l.trim());
+    const activeIdx = lines.findIndex(l => l.includes('active'));
+    const stoppedIdx = lines.findIndex(l => l.includes('stopped'));
+    assert.ok(activeIdx < stoppedIdx, `active (${activeIdx}) should appear before stopped (${stoppedIdx})`);
+  });
+
+  it('shows resume hint for stopped runs only', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    // The Python block should only show resume for stopped/detached runs
+    assert.ok(script.includes("'resumable': status in ('stopped', 'detached')"));
+    assert.ok(script.includes("if run['resumable']"));
+    assert.ok(script.includes("resume:"));
+  });
+
+  it('extracts codex title from SQLite threads table', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    assert.ok(script.includes('get_codex_title'));
+    assert.ok(script.includes('state_5.sqlite'));
+    assert.ok(script.includes('SELECT title, first_user_message FROM threads'));
+  });
+
+  it('handles missing codex_home and missing session_id gracefully', () => {
+    rmSync(runsDir, { recursive: true, force: true });
+    mkdirSync(runsDir, { recursive: true });
+
+    createRun('cccccccc-0000-0000-0000-000000000003', {
+      codex: { session_id: '' },
+      codex_home: '/nonexistent/path',
+    });
+
+    // Should not crash
+    const output = execSync(
+      `python3 -c "
+import json, os, pathlib
+runs_dir = pathlib.Path('${runsDir}')
+for rj in runs_dir.glob('*/run.json'):
+    data = json.load(open(rj))
+    x_sid = (data.get('codex') or {}).get('session_id', '')
+    print('codex:', x_sid[:8] + '...' if x_sid else 'missing')
+"`,
+      { encoding: 'utf8' }
+    ).trim();
+    assert.ok(output.includes('missing'));
+  });
+
+  it('truncates long titles with ellipsis', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    assert.ok(script.includes('MAX_TITLE = 72'));
+    assert.ok(script.includes("title[:MAX_TITLE - 1]"));
+  });
+
+  it('shows shortened session IDs', () => {
+    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+    // Session IDs should be truncated to 8 chars + ellipsis
+    assert.ok(script.includes("c_sid[:8]"));
+    assert.ok(script.includes("x_sid[:8]"));
+  });
+});
+
 // ─── Role prompt injection ────────────────────────────────────────────────────
 
 describe('role prompt injection', () => {
@@ -1923,10 +2048,10 @@ describe('/destroy ordering', () => {
     // Find the destroy handler's setTimeout body
     const destroyBlock = src.slice(src.indexOf("case 'destroy':"), src.indexOf("case 'destroy':") + 600);
     const rmIndex = destroyBlock.indexOf('rmSync');
-    const killIndex = destroyBlock.indexOf('kill-session');
+    const killIndex = destroyBlock.indexOf('killSession');
     assert.ok(rmIndex > 0, 'rmSync should exist in destroy handler');
-    assert.ok(killIndex > 0, 'kill-session should exist in destroy handler');
-    assert.ok(rmIndex < killIndex, `rmSync (${rmIndex}) should come before kill-session (${killIndex})`);
+    assert.ok(killIndex > 0, 'killSession should exist in destroy handler');
+    assert.ok(rmIndex < killIndex, `rmSync (${rmIndex}) should come before killSession (${killIndex})`);
   });
 });
 
@@ -2239,5 +2364,171 @@ describe('per-direction relay cooldown', () => {
     // The timestamp should NOT be updated (relay was blocked)
     assert.equal(lastAutoRelayTime['claude->codex'], firstTime,
       'same-direction relay should be blocked within cooldown');
+  });
+});
+
+// ─── Stale binding detection and /rebind ──────────────────────────────────────
+
+describe('stale binding detection', () => {
+  it('/rebind claude parses correctly', () => {
+    const result = parseInput('/rebind claude');
+    assert.deepStrictEqual(result, { type: 'rebind', target: 'claude' });
+  });
+
+  it('/rebind codex parses correctly', () => {
+    const result = parseInput('/rebind codex');
+    assert.deepStrictEqual(result, { type: 'rebind', target: 'codex' });
+  });
+
+  it('sessionState includes stale-detection fields', () => {
+    assert.ok('lastSessionActivityAt' in sessionState.claude);
+    assert.ok('staleDowngraded' in sessionState.claude);
+    assert.ok('lastSessionActivityAt' in sessionState.codex);
+    assert.ok('staleDowngraded' in sessionState.codex);
+  });
+
+  it('downgradeToPane sets relayMode to pane and marks staleDowngraded', () => {
+    const origMode = sessionState.claude.relayMode;
+    const origStale = sessionState.claude.staleDowngraded;
+    sessionState.claude.relayMode = 'session';
+    sessionState.claude.staleDowngraded = false;
+
+    downgradeToPane('claude', 'test reason');
+
+    assert.equal(sessionState.claude.relayMode, 'pane');
+    assert.equal(sessionState.claude.staleDowngraded, true);
+
+    // Restore
+    sessionState.claude.relayMode = origMode;
+    sessionState.claude.staleDowngraded = origStale;
+  });
+
+  it('/status output indicates stale downgrade', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    assert.ok(src.includes('staleDowngraded'));
+    assert.ok(src.includes('stale session binding'));
+    assert.ok(src.includes('possible manual /resume'));
+  });
+});
+
+describe('rebind candidate search', () => {
+  const testDir = '/tmp/duet-test-rebind-' + process.pid;
+
+  before(() => {
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  after(() => {
+    stopFileWatchers(); // Close any file watchers opened during rebind tests
+    rmSync(testDir, { recursive: true, force: true });
+    // Restore session state
+    sessionState.claude.path = null;
+    sessionState.claude.resolved = false;
+    sessionState.claude.offset = 0;
+    sessionState.claude.lastResponse = null;
+    sessionState.claude.relayMode = 'pending';
+    sessionState.claude.staleDowngraded = false;
+    sessionState.claude.lastSessionActivityAt = 0;
+    sessionState.codex.path = null;
+    sessionState.codex.resolved = false;
+    sessionState.codex.relayMode = 'pending';
+    sessionState.codex.staleDowngraded = false;
+  });
+
+  it('finds newer .jsonl file as rebind candidate', () => {
+    const staleFile = join(testDir, 'aaaa-stale.jsonl');
+    const freshFile = join(testDir, 'bbbb-fresh.jsonl');
+    writeFileSync(staleFile, '{"old": true}\n');
+    // Small delay to ensure different mtime
+    execSync('sleep 0.1');
+    writeFileSync(freshFile, '{"new": true}\n');
+
+    sessionState.claude.path = staleFile;
+    sessionState.claude.resolved = true;
+
+    const candidate = findRebindCandidate('claude');
+    assert.equal(candidate, freshFile);
+  });
+
+  it('returns null when no other .jsonl files exist', () => {
+    const onlyFile = join(testDir, 'only.jsonl');
+    writeFileSync(onlyFile, '{"only": true}\n');
+
+    // Remove the other files from previous test
+    for (const f of readdirSync(testDir)) {
+      if (f !== 'only.jsonl') rmSync(join(testDir, f));
+    }
+
+    sessionState.claude.path = onlyFile;
+    sessionState.claude.resolved = true;
+
+    const candidate = findRebindCandidate('claude');
+    assert.equal(candidate, null);
+  });
+
+  it('rebindTool updates session state and seeks to EOF', async () => {
+    const newFile = join(testDir, '12345678-abcd-1234-abcd-123456789012.jsonl');
+    writeFileSync(newFile, '{"line": 1}\n{"line": 2}\n');
+
+    const staleFile = join(testDir, 'stale.jsonl');
+    writeFileSync(staleFile, '{"stale": true}\n');
+    sessionState.claude.path = staleFile;
+    sessionState.claude.resolved = true;
+    sessionState.claude.relayMode = 'pane';
+    sessionState.claude.staleDowngraded = true;
+
+    const runDir = join(testDir, 'run');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'run.json'), '{}');
+    setRunDir(runDir);
+
+    const result = await rebindTool('claude', newFile);
+
+    assert.equal(result.newPath, newFile);
+    assert.equal(result.newSid, '12345678-abcd-1234-abcd-123456789012');
+    assert.equal(sessionState.claude.path, newFile);
+    assert.equal(sessionState.claude.relayMode, 'session');
+    assert.equal(sessionState.claude.staleDowngraded, false);
+    // Offset should be at EOF
+    const { size } = statSync(newFile);
+    assert.equal(sessionState.claude.offset, size);
+
+    // run.json should be updated
+    const rj = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8'));
+    assert.equal(rj.claude.binding_path, newFile);
+    assert.equal(rj.claude.session_id, '12345678-abcd-1234-abcd-123456789012');
+
+    setRunDir(null);
+  });
+
+  it('works for codex too', () => {
+    // Clean up
+    for (const f of readdirSync(testDir)) {
+      if (f.endsWith('.jsonl')) rmSync(join(testDir, f));
+    }
+
+    const staleFile = join(testDir, 'codex-stale.jsonl');
+    const freshFile = join(testDir, 'codex-fresh.jsonl');
+    writeFileSync(staleFile, '{"old": true}\n');
+    execSync('sleep 0.1');
+    writeFileSync(freshFile, '{"new": true}\n');
+
+    sessionState.codex.path = staleFile;
+    sessionState.codex.resolved = true;
+
+    const candidate = findRebindCandidate('codex');
+    assert.equal(candidate, freshFile);
+
+    // Restore
+    sessionState.codex.path = null;
+    sessionState.codex.resolved = false;
+  });
+});
+
+describe('help text includes /rebind', () => {
+  it('router help text mentions /rebind', () => {
+    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    assert.ok(src.includes('/rebind claude|codex'));
+    assert.ok(src.includes('Re-discover session'));
   });
 });
