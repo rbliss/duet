@@ -159,7 +159,7 @@ Both CLIs run as full interactive processes in their own pseudo-terminals. Duet 
 cd ~/duet && node --test
 ```
 
-292 tests across 56 suites: shell escaping, input parsing (including converse/watch/stop), content diffing (`getNewContent`), @mention detection (`detectMentions`), tmux integration (sendKeys, capturePane, pasteToPane, focusPane, cross-pane relay), launcher layout, response extraction (Claude and Codex formats), completion detection (`isResponseComplete`), incremental session reader, end-to-end session binding (bindings.json manifest), binding lifecycle (manifest caching and re-reads), launcher binding contract (bind-sessions.sh with fallback coverage), session-only automation enforcement, explicit binding enforcement, watch/status messaging, CODEX_HOME isolation, typed manifest schemas, and edge cases. Integration tests run against real tmux sessions.
+294 tests across 56 suites: shell escaping, input parsing (including converse/watch/stop), content diffing (`getNewContent`), @mention detection (`detectMentions`), tmux integration (sendKeys, capturePane, pasteToPane, focusPane, cross-pane relay), launcher layout, response extraction (Claude and Codex formats), completion detection (`isResponseComplete`), incremental session reader, end-to-end session binding (bindings.json manifest), binding lifecycle (manifest caching and re-reads), launcher binding contract (bind-sessions.sh with fallback coverage), session-only automation enforcement, explicit binding enforcement, watch/status messaging, CODEX_HOME isolation, typed manifest schemas, and edge cases. Integration tests run against real tmux sessions.
 
 ## Known limitations
 

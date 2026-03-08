@@ -427,6 +427,40 @@ describe('launcher binding contract', () => {
     assert.equal(bindings.codex.path, isolatedFile);
     assert.equal(bindings.codex.level, 'process');
   });
+
+  it('discovers nested codex session file in isolated store', () => {
+    cleanState();
+    const nestedDir = join(codexSessions, '2026', '03', '08');
+    mkdirSync(nestedDir, { recursive: true });
+    const nestedFile = join(nestedDir, 'nested-session.jsonl');
+    writeFileSync(nestedFile, JSON.stringify({ type: 'session_meta', payload: { id: 'nested-iso', cwd: '/test' } }) + '\n');
+
+    runBind({ CLAUDE_SESSION_ID: 'nonexistent' });
+
+    const bindings = JSON.parse(readFileSync(join(stateDir, 'bindings.json'), 'utf8'));
+    assert.equal(bindings.codex.status, 'bound');
+    assert.equal(bindings.codex.path, nestedFile);
+    assert.equal(bindings.codex.level, 'process');
+    assert.equal(bindings.codex.session_id, 'nested-iso');
+  });
+
+  it('discovers nested codex session file in global fallback with cwd match', () => {
+    cleanState();
+    const nestedDir = join(globalCodexSessions, '2026', '03', '08');
+    mkdirSync(nestedDir, { recursive: true });
+    const nestedFile = join(nestedDir, 'nested-global.jsonl');
+    const meta = JSON.stringify({ type: 'session_meta', payload: { id: 'nested-glob', cwd: '/test/workdir' } });
+    const child = spawn('bash', ['-c', `sleep 1; echo '${meta}' > '${nestedFile}'`], { detached: true, stdio: 'ignore' });
+    child.unref();
+
+    runBind({ CLAUDE_SESSION_ID: 'nonexistent' });
+
+    const bindings = JSON.parse(readFileSync(join(stateDir, 'bindings.json'), 'utf8'));
+    assert.equal(bindings.codex.status, 'bound');
+    assert.equal(bindings.codex.path, nestedFile);
+    assert.equal(bindings.codex.level, 'workspace');
+    assert.equal(bindings.codex.session_id, 'nested-glob');
+  });
 });
 
 // ─── Resume: EOF-seek on resumed session binding ─────────────────────────────

@@ -7,10 +7,12 @@ Duet is a tmux-based console that runs Claude Code and Codex side by side, with 
 ```
 duet.sh             Launcher — subcommand dispatch, run registry, tmux layout, tool launches
 router.mjs          Router — command parsing, relay dispatch, watch/converse modes
-bind-sessions.sh    Background binding reconciler — discovers session files, writes manifest
+bind-sessions.sh    Compatibility shim — execs node src/bindings/reconciler.mjs
 lib/
   codex-home.sh               Sourceable helper: CODEX_HOME overlay setup (used by duet.sh, tested directly)
 src/
+  bindings/reconciler.mjs       Binding reconciler (ported from bash+python to JS)
+  bindings/reconciler.ts        TypeScript type layer (BindingReconcilerEnv)
   transport/tmux-client.mjs     Async tmux transport with per-pane write queues
   relay/session-reader.mjs      Incremental JSONL session reader, response extraction
   runtime/bindings-store.mjs    Binding manifest loader (STATE_DIR, loadBindings)
@@ -18,7 +20,7 @@ src/
   model/manifests.mjs           Runtime manifest schemas (RunManifest, BindingsManifest) with zod
   model/manifests.ts            TypeScript type layer over manifests.mjs
   debug/debug-report.mjs        Debug snapshot collection and rendering
-test/               Test suite (292 tests, 56 suites) — run with: node --test
+test/               Test suite (294 tests, 56 suites) — run with: node --test
 test-support/       Shared test helpers, fake agents, e2e harness
 DUET.md             System prompt injected into both tools at launch
 README.md           User-facing documentation
@@ -63,7 +65,7 @@ Entry point with subcommand dispatch. Creates a tmux session with three panes: C
     <cwd-hash>.json   Workspace index (active run, run history)
 ```
 
-### Binding reconciler (bind-sessions.sh)
+### Binding reconciler (src/bindings/reconciler.mjs)
 
 Runs as a background process after launch. Sole authority for session discovery — the router never probes for files directly.
 
@@ -123,7 +125,7 @@ Node.js process providing the interactive command interface. Pure manifest consu
 
 ## Key design decisions
 
-1. **Single binding authority**: `bind-sessions.sh` owns all session discovery. The router only consumes the manifest. This avoids split-authority bugs where two components race to find session files.
+1. **Single binding authority**: `src/bindings/reconciler.mjs` owns all session discovery. `bind-sessions.sh` is a thin shim that execs the Node module. The router only consumes the manifest. This avoids split-authority bugs where two components race to find session files.
 
 2. **Session-only automation**: `fs.watch()` on session logs gives sub-second relay latency with authoritative, structured output. Automation paths (`/converse`, `/watch`, `@relay`) require session bindings — there is no pane-scraping fallback. `capture-pane` is used only for diagnostics (`/snap`).
 
@@ -145,7 +147,7 @@ Node.js process providing the interactive command interface. Pure manifest consu
 node --test
 ```
 
-Tests use Node's built-in test runner. Integration tests create real tmux sessions. The binding contract tests run `bind-sessions.sh` with `BIND_TIMEOUT=2` (1 second) to test the full lifecycle quickly.
+Tests use Node's built-in test runner. Integration tests create real tmux sessions. The binding contract tests run `bind-sessions.sh` (which delegates to `src/bindings/reconciler.mjs`) with `BIND_TIMEOUT=2` (1 second) to test the full lifecycle quickly.
 
 Key test patterns:
 - `resetSessionState()` clears router state between tests
