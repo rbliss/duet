@@ -12,19 +12,18 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-/** @type {boolean} */
-export const isDist = __dirname.includes(`${sep}dist${sep}`) || __dirname.endsWith(`${sep}dist`);
+export const isDist: boolean = __dirname.includes(`${sep}dist${sep}`) || __dirname.endsWith(`${sep}dist`);
 
 const root = resolve(__dirname, '../..');
 
 /** Absolute paths to internal entrypoints. */
 export const entryPaths = Object.freeze({
   /** CLI entry point. */
-  cli:         isDist ? join(root, 'dist/cli/duet.mjs')             : join(root, 'src/cli/duet.mjs'),
+  cli:         isDist ? join(root, 'dist/cli/duet.mjs')            : join(root, 'src/cli/duet.mjs'),
   /** Router entry point (.mjs source → .mjs dist). */
-  router:      isDist ? join(root, 'dist/router/controller.mjs')    : join(root, 'router.mjs'),
+  router:      isDist ? join(root, 'dist/router/controller.mjs')   : join(root, 'router.mjs'),
   /** Binding reconciler entry point. */
-  reconciler:  isDist ? join(root, 'dist/bindings/reconciler.mjs')  : join(root, 'src/bindings/reconciler.mjs'),
+  reconciler:  isDist ? join(root, 'dist/bindings/reconciler.js')  : join(root, 'src/bindings/reconciler.ts'),
   /** Project root directory. */
   root,
 });
@@ -32,6 +31,5 @@ export const entryPaths = Object.freeze({
 /**
  * Extra node arguments for spawning child processes.
  * In source mode, includes the tsx ESM loader for .ts resolution.
- * @type {readonly string[]}
  */
-export const nodeArgs = Object.freeze(isDist ? [] : ['--import', 'tsx/esm']);
+export const nodeArgs: readonly string[] = Object.freeze(isDist ? [] : ['--import', 'tsx/esm']);

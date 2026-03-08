@@ -5,16 +5,16 @@
 
 // ─── Re-exports: existing modules (unchanged) ───────────────────────────────
 
-export { shellEscape, sendKeys, pasteToPane, capturePane, focusPane } from './src/transport/tmux-client.mjs';
+export { shellEscape, sendKeys, pasteToPane, capturePane, focusPane } from './src/transport/tmux-client.js';
 export { setRunDir, updateRunJson } from './src/runtime/run-store.js';
 export { STATE_DIR, setStateDir } from './src/runtime/bindings-store.js';
-export { collectDebugSnapshot, renderDebugReport } from './src/debug/debug-report.mjs';
+export { collectDebugSnapshot, renderDebugReport } from './src/debug/debug-report.js';
 export {
   sessionState, resolveSessionPath, readIncremental,
   extractClaudeResponse, extractCodexResponse, isResponseComplete,
   getClaudeLastResponse, getCodexLastResponse, getLastResponse,
   setDuetMode, extractCodexSessionId,
-} from './src/relay/session-reader.mjs';
+} from './src/relay/session-reader.js';
 
 // ─── Re-exports: router modules (new) ───────────────────────────────────────
 

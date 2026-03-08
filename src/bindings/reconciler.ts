@@ -5,25 +5,18 @@
  *   pending → bound    (session file discovered)
  *   pending → degraded (deadline expired without discovery)
  *
- * Expects environment variables (see BindingReconcilerEnv below).
+ * Expects environment variables (see ReconcilerEnv below).
  * Writes $STATE_DIR/bindings.json as its sole output.
  * Always exits 0 (partial binding is not an error).
- *
- * @typedef {import('../types/runtime.js').ReconcilerEnv} ReconcilerEnv
- * @typedef {import('../types/runtime.js').ReconcilerToolState} ReconcilerToolState
  */
 
+import type { ReconcilerEnv, ReconcilerToolState } from '../types/runtime.js';
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'fs';
 import { join, basename } from 'path';
 
 // ─── Environment contract ────────────────────────────────────────────────────
 
-/**
- * Parse and validate the reconciler's environment inputs once up front.
- * Returns a frozen object — no scattered process.env reads.
- * @returns {Readonly<ReconcilerEnv>}
- */
-function parseEnv() {
+function parseEnv(): Readonly<ReconcilerEnv> {
   const env = process.env;
   const claudeSessionId = env.CLAUDE_SESSION_ID;
   const claudeProjects = env.CLAUDE_PROJECTS;
@@ -32,8 +25,7 @@ function parseEnv() {
   const workdir = env.WORKDIR;
 
   if (!claudeSessionId || !claudeProjects || !codexSessions || !stateDir || !workdir) {
-    /** @type {string[]} */
-    const missing = [];
+    const missing: string[] = [];
     if (!claudeSessionId) missing.push('CLAUDE_SESSION_ID');
     if (!claudeProjects) missing.push('CLAUDE_PROJECTS');
     if (!codexSessions) missing.push('CODEX_SESSIONS');
@@ -58,12 +50,7 @@ function parseEnv() {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/**
- * Extract Codex session ID from a session file's first line (payload.id).
- * @param {string} filePath
- * @returns {string}
- */
-function extractCodexSessionId(filePath) {
+function extractCodexSessionId(filePath: string): string {
   try {
     const firstLine = readFileSync(filePath, 'utf8').split('\n')[0];
     const data = JSON.parse(firstLine);
@@ -73,12 +60,7 @@ function extractCodexSessionId(filePath) {
   }
 }
 
-/**
- * Extract Codex cwd from a session file's first line (payload.cwd).
- * @param {string} filePath
- * @returns {string}
- */
-function extractCodexCwd(filePath) {
+function extractCodexCwd(filePath: string): string {
   try {
     const firstLine = readFileSync(filePath, 'utf8').split('\n')[0];
     const data = JSON.parse(firstLine);
@@ -88,14 +70,8 @@ function extractCodexCwd(filePath) {
   }
 }
 
-/**
- * Find .jsonl files recursively under a directory.
- * @param {string} dir
- * @returns {string[]}
- */
-function findJsonlFiles(dir) {
-  /** @type {string[]} */
-  const results = [];
+function findJsonlFiles(dir: string): string[] {
+  const results: string[] = [];
   try {
     _walkDir(dir, results);
   } catch {
@@ -104,11 +80,7 @@ function findJsonlFiles(dir) {
   return results;
 }
 
-/**
- * @param {string} dir
- * @param {string[]} results
- */
-function _walkDir(dir, results) {
+function _walkDir(dir: string, results: string[]): void {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -125,34 +97,24 @@ function _walkDir(dir, results) {
   }
 }
 
-/** @returns {string} */
-function nowIso() {
+function nowIso(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
-/**
- * @param {number} ms
- * @returns {Promise<void>}
- */
-function sleep(ms) {
+function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // ─── Manifest state ──────────────────────────────────────────────────────────
 
-/** @returns {{ claude: ReconcilerToolState, codex: ReconcilerToolState }} */
-function createManifestState() {
+function createManifestState(): { claude: ReconcilerToolState; codex: ReconcilerToolState } {
   return {
     claude: { status: 'pending', path: '', level: '', sessionId: '' },
     codex: { status: 'pending', path: '', level: '', sessionId: '' },
   };
 }
 
-/**
- * @param {{ claude: ReconcilerToolState, codex: ReconcilerToolState }} state
- * @param {string} stateDir
- */
-function writeManifest(state, stateDir) {
+function writeManifest(state: { claude: ReconcilerToolState; codex: ReconcilerToolState }, stateDir: string): void {
   const now = nowIso();
   const bindings = {
     claude: {
@@ -175,11 +137,7 @@ function writeManifest(state, stateDir) {
 
 // ─── Main reconciler logic ───────────────────────────────────────────────────
 
-/**
- * @param {ReconcilerEnv} [envOverride]
- * @returns {Promise<void>}
- */
-export async function reconcile(envOverride) {
+export async function reconcile(envOverride?: ReconcilerEnv): Promise<void> {
   const env = envOverride || parseEnv();
   const state = createManifestState();
   let claudeBound = false;
@@ -291,7 +249,11 @@ export async function reconcile(envOverride) {
 // When run directly (not imported), execute reconciler from process.env
 const isMain = process.argv[1] && (
   process.argv[1].endsWith('/reconciler.mjs') ||
-  process.argv[1].endsWith('\\reconciler.mjs')
+  process.argv[1].endsWith('/reconciler.ts') ||
+  process.argv[1].endsWith('/reconciler.js') ||
+  process.argv[1].endsWith('\\reconciler.mjs') ||
+  process.argv[1].endsWith('\\reconciler.ts') ||
+  process.argv[1].endsWith('\\reconciler.js')
 );
 
 if (isMain) {

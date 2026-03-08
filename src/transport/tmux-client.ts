@@ -3,18 +3,13 @@ import { writeFile, unlink } from 'fs/promises';
 
 // Build tmux command prefix — uses isolated socket when DUET_TMUX_SOCKET is set.
 // Read lazily so tests can set process.env.DUET_TMUX_SOCKET after import.
-/** @returns {string} */
-function tmuxCmd() {
+function tmuxCmd(): string {
   return process.env.DUET_TMUX_SOCKET
     ? `tmux -S ${process.env.DUET_TMUX_SOCKET}`
     : 'tmux';
 }
 
-/**
- * @param {string} cmd
- * @returns {Promise<{stdout: string, stderr: string}>}
- */
-function execAsync(cmd) {
+function execAsync(cmd: string): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     exec(cmd, { encoding: 'utf8' }, (err, stdout, stderr) => {
       if (err) reject(err);
@@ -23,25 +18,14 @@ function execAsync(cmd) {
   });
 }
 
-/**
- * @param {number} ms
- * @returns {Promise<void>}
- */
-function delay(ms) {
+function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // Per-pane write queues to serialize sends/pastes to the same pane
-/** @type {Map<string, Promise<unknown>>} */
-const writeQueues = new Map();
+const writeQueues = new Map<string, Promise<unknown>>();
 
-/**
- * @template T
- * @param {string} pane
- * @param {() => Promise<T>} fn
- * @returns {Promise<T>}
- */
-function enqueue(pane, fn) {
+function enqueue<T>(pane: string, fn: () => Promise<T>): Promise<T> {
   const prev = writeQueues.get(pane) || Promise.resolve();
   const next = prev.then(fn, fn); // always proceed even if previous failed
   writeQueues.set(pane, next);
@@ -52,20 +36,11 @@ function enqueue(pane, fn) {
 // Buffer names include PID to avoid collisions when multiple processes share a tmux server.
 let pasteSeq = 0;
 
-/**
- * @param {string} text
- * @returns {string}
- */
-export function shellEscape(text) {
+export function shellEscape(text: string): string {
   return "'" + text.replace(/'/g, "'\"'\"'") + "'";
 }
 
-/**
- * @param {string | undefined} pane
- * @param {string} text
- * @returns {Promise<boolean>}
- */
-export async function sendKeys(pane, text) {
+export async function sendKeys(pane: string | undefined, text: string): Promise<boolean> {
   if (!pane) return false;
   return enqueue(pane, async () => {
     try {
@@ -80,12 +55,7 @@ export async function sendKeys(pane, text) {
   });
 }
 
-/**
- * @param {string | undefined} pane
- * @param {string} text
- * @returns {Promise<boolean>}
- */
-export async function pasteToPane(pane, text) {
+export async function pasteToPane(pane: string | undefined, text: string): Promise<boolean> {
   if (!pane) return false;
   return enqueue(pane, async () => {
     const seq = pasteSeq++;
@@ -108,12 +78,7 @@ export async function pasteToPane(pane, text) {
   });
 }
 
-/**
- * @param {string} pane
- * @param {number} [lines]
- * @returns {Promise<string>}
- */
-export async function capturePane(pane, lines = 50) {
+export async function capturePane(pane: string, lines: number = 50): Promise<string> {
   try {
     const { stdout } = await execAsync(
       `${tmuxCmd()} capture-pane -t ${shellEscape(pane)} -p -S -${lines}`
@@ -124,11 +89,7 @@ export async function capturePane(pane, lines = 50) {
   }
 }
 
-/**
- * @param {string | undefined} pane
- * @returns {Promise<boolean>}
- */
-export async function focusPane(pane) {
+export async function focusPane(pane: string | undefined): Promise<boolean> {
   if (!pane) return false;
   try {
     await execAsync(`${tmuxCmd()} select-pane -t ${shellEscape(pane)}`);
@@ -138,11 +99,7 @@ export async function focusPane(pane) {
   }
 }
 
-/**
- * @param {string} session
- * @returns {Promise<boolean>}
- */
-export async function killSession(session) {
+export async function killSession(session: string): Promise<boolean> {
   try {
     await execAsync(`${tmuxCmd()} kill-session -t ${shellEscape(session)}`);
     return true;
@@ -151,11 +108,7 @@ export async function killSession(session) {
   }
 }
 
-/**
- * @param {string} session
- * @returns {Promise<boolean>}
- */
-export async function detachClient(session) {
+export async function detachClient(session: string): Promise<boolean> {
   try {
     await execAsync(`${tmuxCmd()} detach-client -s ${shellEscape(session)}`);
     return true;
@@ -164,12 +117,7 @@ export async function detachClient(session) {
   }
 }
 
-/**
- * @param {string} target
- * @param {string} fmt
- * @returns {Promise<string>}
- */
-export async function displayMessage(target, fmt) {
+export async function displayMessage(target: string, fmt: string): Promise<string> {
   try {
     const { stdout } = await execAsync(
       `${tmuxCmd()} display-message -t ${shellEscape(target)} -p ${shellEscape(fmt)}`

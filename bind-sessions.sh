@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # bind-sessions.sh - Compatibility shim for the binding reconciler.
-# Actual logic lives in src/bindings/reconciler.mjs (or dist/).
+# Actual logic lives in src/bindings/reconciler.ts (or dist/).
 #
 # Expects the same environment variables as before:
 #   CLAUDE_SESSION_ID, CLAUDE_PROJECTS, CODEX_SESSIONS,
@@ -15,7 +15,7 @@
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ "${DUET_USE_DIST:-}" = "1" ]; then
-  exec node "$DIR/dist/bindings/reconciler.mjs" "$@"
+  exec node "$DIR/dist/bindings/reconciler.js" "$@"
 else
-  exec node "$DIR/src/bindings/reconciler.mjs" "$@"
+  exec node --import tsx/esm "$DIR/src/bindings/reconciler.ts" "$@"
 fi

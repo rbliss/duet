@@ -1,8 +1,5 @@
-/**
- * @typedef {import('../types/runtime.js').DebugSnapshotInput} DebugSnapshotInput
- */
-
 import { readFileSync, statSync } from 'fs';
+import type { DebugSnapshotInput } from '../types/runtime.js';
 
 // Truncation limits
 const RESPONSE_PREVIEW_LEN = 200;
@@ -11,22 +8,12 @@ const LOG_TAIL_LINES = 5;
 const LOG_TAIL_FULL_LINES = 20;
 const PANE_CAPTURE_LINES = 30;
 
-/**
- * @param {string | null | undefined} str
- * @param {number} maxLen
- * @returns {string | null}
- */
-function truncate(str, maxLen) {
+function truncate(str: string | null | undefined, maxLen: number): string | null {
   if (!str || str.length <= maxLen) return str || null;
   return str.slice(0, maxLen) + `… [${str.length - maxLen} more chars]`;
 }
 
-/**
- * @param {string} filePath
- * @param {number} n
- * @returns {{ lines: string[], totalLines: number } | null}
- */
-function tailLines(filePath, n) {
+function tailLines(filePath: string, n: number): { lines: string[]; totalLines: number } | null {
   try {
     const content = readFileSync(filePath, 'utf8');
     const lines = content.trimEnd().split('\n');
@@ -37,11 +24,7 @@ function tailLines(filePath, n) {
   }
 }
 
-/**
- * @param {string} filePath
- * @returns {number | null}
- */
-function fileSize(filePath) {
+function fileSize(filePath: string): number | null {
   try {
     return statSync(filePath).size;
   } catch {
@@ -49,64 +32,53 @@ function fileSize(filePath) {
   }
 }
 
-/**
- * Normalize relayMode to user-facing binding status.
- * @param {string} relayMode
- * @returns {string}
- */
-function normalizeBindingStatus(relayMode) {
+function normalizeBindingStatus(relayMode: string): string {
   if (relayMode === 'session') return 'bound';
   if (relayMode === 'pending') return 'pending';
   return 'degraded';
 }
 
-/**
- * Collect a debug snapshot from the current Duet session state.
- * @param {DebugSnapshotInput} params
- * @returns {Record<string, unknown>}
- */
-export function collectDebugSnapshot({ sessionState, routerState, bindings, runJson, paneCaptures, full = false }) {
+export function collectDebugSnapshot({ sessionState, routerState, bindings, runJson, paneCaptures, full = false }: DebugSnapshotInput): Record<string, unknown> {
   const previewLen = full ? RESPONSE_PREVIEW_FULL_LEN : RESPONSE_PREVIEW_LEN;
   const tailN = full ? LOG_TAIL_FULL_LINES : LOG_TAIL_LINES;
 
-  /** @type {Record<string, unknown>} */
-  const tools = {};
+  const tools: Record<string, unknown> = {};
   for (const tool of ['claude', 'codex']) {
-    const st = /** @type {Record<string, unknown>} */ (sessionState[tool]);
-    const stPath = /** @type {string | null} */ (st.path);
+    const st = sessionState[tool] as Record<string, unknown>;
+    const stPath = st.path as string | null;
     const logTail = stPath ? tailLines(stPath, tailN) : null;
 
     // Cross-file binding comparison
-    const bindingsEntry = bindings ? /** @type {Record<string, unknown> | null} */ (/** @type {unknown} */ (bindings[/** @type {'claude' | 'codex'} */ (tool)])) : null;
-    const runEntry = runJson ? /** @type {Record<string, unknown> | null} */ (runJson[tool]) : null;
+    const bindingsEntry = bindings ? (bindings[tool as 'claude' | 'codex'] as unknown as Record<string, unknown> | null) : null;
+    const runEntry = runJson ? (runJson[tool] as Record<string, unknown> | null) : null;
 
     tools[tool] = {
       // Normalized user-facing status
-      bindingStatus: normalizeBindingStatus(/** @type {string} */ (st.relayMode)),
+      bindingStatus: normalizeBindingStatus(st.relayMode as string),
       // Raw relayMode for implementation detail
       relayMode: st.relayMode,
       bindingLevel: st.bindingLevel,
       // Live router/session state
       livePath: stPath,
-      watcherActive: routerState.fileWatcherActive[/** @type {'claude' | 'codex'} */ (tool)] || false,
+      watcherActive: routerState.fileWatcherActive[tool as 'claude' | 'codex'] || false,
       watcherFailed: routerState.watcherFailed.includes(tool),
       pending: routerState.pendingTools.includes(tool),
       offset: st.offset,
       fileSize: stPath ? fileSize(stPath) : null,
       lastSessionActivityAt: st.lastSessionActivityAt || null,
-      lastResponsePreview: truncate(/** @type {string | null} */ (st.lastResponse), previewLen),
+      lastResponsePreview: truncate(st.lastResponse as string | null, previewLen),
       sessionLogTail: logTail,
       // bindings.json state
       manifest: bindingsEntry ? {
-        status: /** @type {unknown} */ (bindingsEntry.status) || null,
-        level: /** @type {unknown} */ (bindingsEntry.level) || null,
-        path: /** @type {unknown} */ (bindingsEntry.path) || null,
-        session_id: /** @type {unknown} */ (bindingsEntry.session_id) || null,
+        status: bindingsEntry.status || null,
+        level: bindingsEntry.level || null,
+        path: bindingsEntry.path || null,
+        session_id: bindingsEntry.session_id || null,
       } : null,
       // run.json state
       runJson: runEntry ? {
-        session_id: /** @type {unknown} */ (runEntry.session_id) || null,
-        binding_path: /** @type {unknown} */ (runEntry.binding_path) || null,
+        session_id: runEntry.session_id || null,
+        binding_path: runEntry.binding_path || null,
       } : null,
     };
   }
@@ -139,14 +111,8 @@ export function collectDebugSnapshot({ sessionState, routerState, bindings, runJ
   };
 }
 
-/**
- * Render a debug snapshot into a human-readable report string.
- * @param {Record<string, unknown>} snapshot
- * @returns {string}
- */
-export function renderDebugReport(snapshot) {
-  /** @type {string[]} */
-  const lines = [];
+export function renderDebugReport(snapshot: Record<string, unknown>): string {
+  const lines: string[] = [];
   const hr = '─'.repeat(50);
 
   lines.push(`${hr}`);
@@ -159,7 +125,7 @@ export function renderDebugReport(snapshot) {
   lines.push(`Mode: ${mode}  Session: ${session}`);
 
   // Run info
-  const run = /** @type {Record<string, unknown> | null} */ (snapshot.run);
+  const run = snapshot.run as Record<string, unknown> | null;
   if (run) {
     lines.push(`Run: ${run.run_id || '?'}  Status: ${run.status || '?'}`);
     lines.push(`CWD: ${run.cwd || '?'}`);
@@ -169,31 +135,31 @@ export function renderDebugReport(snapshot) {
   }
 
   // Router state
-  const router = /** @type {Record<string, unknown>} */ (snapshot.router);
-  const converse = /** @type {Record<string, unknown> | null} */ (router.converse);
+  const router = snapshot.router as Record<string, unknown>;
+  const converse = router.converse as Record<string, unknown> | null;
   lines.push('');
   const routerStatus = router.converseActive
     ? `converse "${converse?.topic}" round ${converse?.round}/${converse?.maxRounds} (${converse?.turn}'s turn)`
     : router.watching ? 'watching' : 'idle';
   lines.push(`Router: ${routerStatus}`);
-  const pendingTools = /** @type {string[]} */ (router.pendingTools);
+  const pendingTools = router.pendingTools as string[];
   if (pendingTools.length > 0) {
     lines.push(`Pending: ${pendingTools.join(', ')}`);
   }
-  const watcherFailed = /** @type {string[]} */ (router.watcherFailed);
+  const watcherFailed = router.watcherFailed as string[];
   if (watcherFailed.length > 0) {
     lines.push(`Watcher failed: ${watcherFailed.join(', ')}`);
   }
 
   // Per-tool cross-file binding comparison + live state
-  const tools = /** @type {Record<string, Record<string, unknown>>} */ (snapshot.tools);
+  const tools = snapshot.tools as Record<string, Record<string, unknown>>;
   for (const tool of ['claude', 'codex']) {
     const t = tools[tool];
     lines.push('');
     lines.push(`[${tool}]`);
 
     // Binding status (normalized)
-    let statusLabel = /** @type {string} */ (t.bindingStatus);
+    let statusLabel = t.bindingStatus as string;
     if (t.bindingStatus === 'bound' && t.watcherFailed) {
       statusLabel = 'bound (watcher FAILED — automation inactive)';
     } else if (t.bindingStatus === 'bound' && t.watcherActive) {
@@ -202,7 +168,7 @@ export function renderDebugReport(snapshot) {
     lines.push(`  status: ${statusLabel}${t.bindingLevel ? ` [${t.bindingLevel}]` : ''}`);
 
     // Cross-file comparison: run.json
-    const tRunJson = /** @type {Record<string, unknown> | null} */ (t.runJson);
+    const tRunJson = t.runJson as Record<string, unknown> | null;
     if (tRunJson) {
       lines.push(`  run.json    session_id: ${tRunJson.session_id || '—'}`);
       lines.push(`              binding_path: ${tRunJson.binding_path || '—'}`);
@@ -211,7 +177,7 @@ export function renderDebugReport(snapshot) {
     }
 
     // Cross-file comparison: bindings.json
-    const manifest = /** @type {Record<string, unknown> | null} */ (t.manifest);
+    const manifest = t.manifest as Record<string, unknown> | null;
     if (manifest) {
       lines.push(`  bindings    status: ${manifest.status || '—'}  level: ${manifest.level || '—'}`);
       lines.push(`              path: ${manifest.path || '—'}`);
@@ -228,13 +194,13 @@ export function renderDebugReport(snapshot) {
       lines.push(`              offset: ${t.offset}  file size: ${t.fileSize ?? '?'}`);
     }
     if (t.lastSessionActivityAt) {
-      const ago = Math.round((Date.now() - /** @type {number} */ (t.lastSessionActivityAt)) / 1000);
+      const ago = Math.round((Date.now() - (t.lastSessionActivityAt as number)) / 1000);
       lines.push(`              last activity: ${ago}s ago`);
     }
     if (t.lastResponsePreview) {
       lines.push(`  last response: ${t.lastResponsePreview}`);
     }
-    const sessionLogTail = /** @type {{ lines: string[], totalLines: number } | null} */ (t.sessionLogTail);
+    const sessionLogTail = t.sessionLogTail as { lines: string[]; totalLines: number } | null;
     if (sessionLogTail) {
       lines.push(`  session log (last ${sessionLogTail.lines.length} of ${sessionLogTail.totalLines} lines):`);
       for (const l of sessionLogTail.lines) {
@@ -245,13 +211,13 @@ export function renderDebugReport(snapshot) {
   }
 
   // Pane captures (full mode only)
-  const paneCaptures = /** @type {Record<string, string | null> | null} */ (snapshot.paneCaptures);
+  const paneCaptures = snapshot.paneCaptures as Record<string, string | null> | null;
   if (paneCaptures) {
     for (const tool of ['claude', 'codex']) {
       if (paneCaptures[tool]) {
         lines.push('');
         lines.push(`[${tool} pane capture]`);
-        const capLines = /** @type {string} */ (paneCaptures[tool]).trimEnd().split('\n');
+        const capLines = (paneCaptures[tool] as string).trimEnd().split('\n');
         for (const l of capLines.slice(-PANE_CAPTURE_LINES)) {
           lines.push(`  ${l}`);
         }

@@ -22,14 +22,14 @@ import {
 import {
   sendKeys, pasteToPane, capturePane, focusPane,
   killSession, detachClient,
-} from '../transport/tmux-client.mjs';
-import { sessionState as _sessionState, resolveSessionPath } from '../relay/session-reader.mjs';
+} from '../transport/tmux-client.js';
+import { sessionState as _sessionState, resolveSessionPath } from '../relay/session-reader.js';
 
 /** @type {SessionStateMap} */
 const sessionState = _sessionState;
 import { loadBindings } from '../runtime/bindings-store.js';
 import { updateRunJson } from '../runtime/run-store.js';
-import { collectDebugSnapshot, renderDebugReport } from '../debug/debug-report.mjs';
+import { collectDebugSnapshot, renderDebugReport } from '../debug/debug-report.js';
 
 // ─── Output relay ────────────────────────────────────────────────────────────
 

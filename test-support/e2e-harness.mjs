@@ -1,7 +1,7 @@
 import { exec, execSync } from 'child_process';
 import { existsSync, writeFileSync, readFileSync, mkdirSync, rmSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
-import { pasteToPane, capturePane } from '../src/transport/tmux-client.mjs';
+import { pasteToPane, capturePane } from '../src/transport/tmux-client.js';
 import { sanitizedEnv } from './env.mjs';
 import { TEST_TMUX_SOCKET, tmuxEnv } from './tmux.mjs';
 

@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createE2eHarness, e2eWaitFor, findRouterPane } from '../test-support/e2e-harness.mjs';
-import { capturePane } from '../src/transport/tmux-client.mjs';
+import { capturePane } from '../src/transport/tmux-client.js';
 
 describe('e2e: /send-debug', { timeout: 60000 }, () => {
   const h = createE2eHarness('debug');

@@ -116,7 +116,7 @@ describe('tmux integration', () => {
     });
 
     it('uses bracketed paste (-p) to avoid chunked paste issues', () => {
-      const src = readFileSync('/home/claude/duet/src/transport/tmux-client.mjs', 'utf8');
+      const src = readFileSync('/home/claude/duet/src/transport/tmux-client.ts', 'utf8');
       assert.ok(src.includes('paste-buffer -p -b'),
         'pasteToPane should use paste-buffer -p for bracketed paste');
     });
@@ -283,7 +283,7 @@ describe('cross-process paste safety', { timeout: 30000 }, () => {
 
     // Spawn two independent Node processes that each call pasteToPane
     // on the same tmux server (via DUET_TMUX_SOCKET) but to different panes.
-    const transportPath = new URL('../src/transport/tmux-client.mjs', import.meta.url).href;
+    const transportPath = new URL('../src/transport/tmux-client.ts', import.meta.url).href;
     const helperScript = (pane, marker) => `
       import { pasteToPane } from '${transportPath}';
       const ok = await pasteToPane(${JSON.stringify(pane)}, 'echo ${marker}');

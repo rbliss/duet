@@ -20,7 +20,7 @@ import {
   tmuxHasSession,
   tmuxAttach,
 } from './tmux.mjs';
-import { entryPaths, nodeArgs } from '../runtime/entry-paths.mjs';
+import { entryPaths, nodeArgs } from '../runtime/entry-paths.js';
 import {
   nowIso,
   readRunField,

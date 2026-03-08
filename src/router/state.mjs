@@ -15,7 +15,7 @@ import { join } from 'path';
 import {
   sessionState as _sessionState, resolveSessionPath, readIncremental,
   isResponseComplete, getLastResponse, extractCodexSessionId,
-} from '../relay/session-reader.mjs';
+} from '../relay/session-reader.js';
 
 /** @type {SessionStateMap} */
 const sessionState = _sessionState;

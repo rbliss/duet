@@ -46,7 +46,7 @@ describe('dist: CLI smoke', () => {
     const stateDir = join(tempBase, 'state');
     mkdirSync(stateDir, { recursive: true });
     try {
-      execSync(`node "${join(PROJECT_ROOT, 'dist/bindings/reconciler.mjs')}"`, {
+      execSync(`node "${join(PROJECT_ROOT, 'dist/bindings/reconciler.js')}"`, {
         encoding: 'utf8',
         env: {
           ...process.env,

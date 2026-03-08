@@ -435,7 +435,7 @@ function sanitizedEnv(overrides = {}) {
 // ─── Integration Tests: tmux operations ──────────────────────────────────────
 
 // Isolated tmux socket — all test tmux traffic goes through this socket only.
-// Setting process.env ensures the imported tmuxCmd() in tmux-client.mjs uses
+// Setting process.env ensures the imported tmuxCmd() in tmux-client.ts uses
 // the isolated socket for sendKeys/capturePane/pasteToPane/focusPane too.
 const TEST_TMUX_SOCKET = `/tmp/duet-test-tmux-${process.pid}.sock`;
 process.env.DUET_TMUX_SOCKET = TEST_TMUX_SOCKET;
@@ -571,7 +571,7 @@ describe('tmux integration', () => {
     });
 
     it('uses bracketed paste (-p) to avoid chunked paste issues', () => {
-      const src = readFileSync('/home/claude/duet/src/transport/tmux-client.mjs', 'utf8');
+      const src = readFileSync('/home/claude/duet/src/transport/tmux-client.ts', 'utf8');
       assert.ok(src.includes('paste-buffer -p -b'),
         'pasteToPane should use paste-buffer -p for bracketed paste');
     });

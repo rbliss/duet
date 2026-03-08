@@ -9,7 +9,7 @@
  */
 
 import { execFileSync, spawnSync } from 'child_process';
-import { entryPaths, nodeArgs } from '../runtime/entry-paths.mjs';
+import { entryPaths, nodeArgs } from '../runtime/entry-paths.js';
 
 /**
  * Shell-quote a string for safe interpolation into commands typed into tmux panes.
