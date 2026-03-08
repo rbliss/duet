@@ -1,11 +1,12 @@
 import { createInterface } from 'readline';
-import { rmSync, statSync, readdirSync, watch } from 'fs';
+import { rmSync, readFileSync, statSync, readdirSync, watch, existsSync } from 'fs';
 import { join } from 'path';
 
 // ─── Module imports ──────────────────────────────────────────────────────────
 
 import { setRunDir, updateRunJson } from './src/runtime/run-store.mjs';
 import { STATE_DIR, setStateDir, loadBindings } from './src/runtime/bindings-store.mjs';
+import { collectDebugSnapshot, renderDebugReport } from './src/debug/debug-report.mjs';
 import {
   sessionState, resolveSessionPath, readIncremental,
   extractClaudeResponse, extractCodexResponse, isResponseComplete,
@@ -22,6 +23,7 @@ import {
 export { shellEscape, sendKeys, pasteToPane, capturePane, focusPane } from './src/transport/tmux-client.mjs';
 export { setRunDir, updateRunJson } from './src/runtime/run-store.mjs';
 export { STATE_DIR, setStateDir } from './src/runtime/bindings-store.mjs';
+export { collectDebugSnapshot, renderDebugReport } from './src/debug/debug-report.mjs';
 export {
   sessionState, resolveSessionPath, readIncremental,
   extractClaudeResponse, extractCodexResponse, isResponseComplete,
@@ -221,8 +223,8 @@ function pollBindings() {
         console.log(`\n${C.red}${name}: binding resolved but watcher failed — automation inactive${C.reset}`);
       }
       prompt();
-    } else if (st.relayMode === 'pane') {
-      // degraded — binding failed
+    } else if (st.relayMode !== 'pending') {
+      // Degraded — binder gave up
       pendingTools.delete(name);
       console.log(`\n${C.yellow}${name}: binding degraded — automation unavailable${C.reset}`);
       prompt();
@@ -338,6 +340,31 @@ export async function rebindTool(tool, newPath) {
   return { oldPath, newPath, newSid };
 }
 
+// Read current run.json for debug snapshots
+function readRunJson() {
+  const runDir = process.env.DUET_RUN_DIR;
+  if (!runDir) return null;
+  const path = join(runDir, 'run.json');
+  try {
+    if (existsSync(path)) return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {}
+  return null;
+}
+
+// Assemble router-internal state for the debug snapshot
+export function getRouterState() {
+  return {
+    watching: isWatching(),
+    converseState: converseState ? { ...converseState } : null,
+    pendingTools: [...pendingTools],
+    watcherFailed: [...watcherFailed],
+    fileWatcherActive: {
+      claude: !!fileWatchers.claude,
+      codex: !!fileWatchers.codex,
+    },
+  };
+}
+
 // Get the latest structured session response for a tool, or null if unavailable
 function getSessionResponse(tool) {
   const logResponse = getLastResponse(tool);
@@ -410,6 +437,17 @@ export function parseInput(input) {
   if (input === '/watch') return { type: 'watch' };
   if (input === '/stop') return { type: 'stop' };
   if (input === '/status') return { type: 'status' };
+  if (input === '/debug') return { type: 'debug', full: false };
+  if (input === '/debug full') return { type: 'debug', full: true };
+
+  if (input.startsWith('/send-debug ')) {
+    const rest = input.slice(12).trim();
+    const match = rest.match(/^(claude|codex)(?:\s+(.*))?$/);
+    if (match) {
+      return { type: 'send-debug', target: match[1], note: match[2] || null };
+    }
+    return { type: 'send-debug-error' };
+  }
 
   if (input.startsWith('/rebind ')) {
     const target = input.slice(8).trim();
@@ -472,7 +510,9 @@ ${C.cyan}${C.bold}  DUET ${C.reset}${C.dim} - Claude Code + Codex, one conversat
   ${C.cyan}/stop${C.reset}                    Stop watching / converse
   ${C.cyan}/status${C.reset}                  Show watch/converse state
 
-  ${C.dim}/focus claude|codex      Switch to pane (click router pane to return)
+  ${C.dim}/debug [full]             Print live debug snapshot
+  /send-debug target [note] Send debug snapshot to claude|codex
+  /focus claude|codex      Switch to pane (click router pane to return)
   /snap  claude|codex      View last output from a pane
   /rebind claude|codex     Re-discover session after manual /resume
   /clear                   Clear this screen
@@ -571,6 +611,52 @@ async function handleInput(input) {
       }
       return;
     }
+    case 'debug': {
+      const runJson = readRunJson();
+      const bindings = loadBindings();
+      const paneCaptures = parsed.full ? {
+        claude: PANES.claude ? await capturePane(PANES.claude, 30) : null,
+        codex: PANES.codex ? await capturePane(PANES.codex, 30) : null,
+      } : null;
+      const snapshot = collectDebugSnapshot({
+        sessionState,
+        routerState: getRouterState(),
+        bindings,
+        runJson,
+        paneCaptures,
+        full: parsed.full,
+      });
+      console.log(renderDebugReport(snapshot));
+      return;
+    }
+    case 'send-debug': {
+      const runJson = readRunJson();
+      const bindings = loadBindings();
+      const snapshot = collectDebugSnapshot({
+        sessionState,
+        routerState: getRouterState(),
+        bindings,
+        runJson,
+        full: false,
+      });
+      const report = renderDebugReport(snapshot);
+      const header = 'The operator is sending you a live debug snapshot of the current Duet session. Please review it and help diagnose any issues.';
+      const noteBlock = parsed.note ? `\nOperator note: ${parsed.note}\n` : '';
+      const msg = `${header}${noteBlock}\n${report}`;
+      if (!PANES[parsed.target]) {
+        console.log(`${C.red}No pane configured for ${parsed.target}${C.reset}`);
+        return;
+      }
+      if (await pasteToPane(PANES[parsed.target], msg)) {
+        console.log(`${C.blue}Debug snapshot sent to ${parsed.target}${C.reset}`);
+      } else {
+        console.log(`${C.red}Failed to send debug snapshot to ${parsed.target}${C.reset}`);
+      }
+      return;
+    }
+    case 'send-debug-error':
+      console.log(`Usage: /send-debug claude|codex [optional note]`);
+      return;
     case 'rebind': {
       if (parsed.target !== 'claude' && parsed.target !== 'codex') {
         console.log(`${C.red}Usage: /rebind claude|codex${C.reset}`);

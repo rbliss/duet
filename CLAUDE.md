@@ -13,7 +13,8 @@ src/
   relay/session-reader.mjs      Incremental JSONL session reader, response extraction
   runtime/bindings-store.mjs    Binding manifest loader (STATE_DIR, loadBindings)
   runtime/run-store.mjs         Run manifest updates (updateRunJson, setRunDir)
-test.mjs            Test suite (213 tests, 43 suites) — run with: node --test test.mjs
+  debug/debug-report.mjs        Debug snapshot collection and rendering
+test.mjs            Test suite (265 tests, 54 suites) — run with: node --test test.mjs
 DUET.md             System prompt injected into both tools at launch
 README.md           User-facing documentation
 docs/
@@ -79,7 +80,7 @@ Node.js process providing the interactive command interface. Pure manifest consu
 
 **Key subsystems:**
 
-- **Command parsing** (`parseInput`): handles `@claude`, `@codex`, `@both`, `@relay`, `/converse`, `/watch`, `/stop`, `/status`, `/focus`, `/snap`, `/clear`, `/help`, `/quit`, `/detach`, `/destroy`
+- **Command parsing** (`parseInput`): handles `@claude`, `@codex`, `@both`, `@relay`, `/converse`, `/watch`, `/stop`, `/status`, `/debug`, `/send-debug`, `/focus`, `/snap`, `/clear`, `/help`, `/quit`, `/detach`, `/destroy`
 - **Relay transport** (session-only): `fs.watch()` on JSONL log files, debounced (200ms with completion signal, 800ms without). No pane-scraping fallback for automation.
 - **Binding resolution** (`resolveSessionPath` in `src/relay/session-reader.mjs`): reads `bindings.json`, caches when all tools are final, re-reads while any tool is `pending`. On resume mode, seeks reader offset to EOF to skip history.
 - **Run manifest management** (`updateRunJson` in `src/runtime/run-store.mjs`): updates `run.json` with binding paths, session IDs, and status changes
@@ -97,16 +98,22 @@ Node.js process providing the interactive command interface. Pure manifest consu
 - `/rebind claude|codex` re-discovers the active session file by scanning for the newest .jsonl
 - `/rebind` is the manual repair path when a tool's session binding becomes stale (e.g., after in-tool `/resume`)
 
+**Debug commands:**
+- `/debug` — print a compact live debug report in the router pane
+- `/debug full` — include pane captures and longer session log tails
+- `/send-debug claude|codex [note]` — send the compact debug report to a tool pane with optional operator note
+
 **Lifecycle commands:**
 - `/quit` — stop tools, preserve run state for resume, mark as `stopped`
 - `/detach` — detach tmux client, tools keep running
 - `/destroy` — stop tools, remove all persistent state
 
 **Exported functions** (used by tests):
-- From `router.mjs` (re-exports + router-specific): `shellEscape`, `parseInput`, `sendKeys`, `capturePane`, `pasteToPane`, `focusPane`, `getNewContent`, `detectMentions`, `resolveSessionPath`, `setStateDir`, `setDuetMode`, `setRunDir`, `readIncremental`, `isResponseComplete`, `updateRunJson`, `handleNewOutput`, `lastAutoRelayTime`, `downgradeToPane` (no-op), `findRebindCandidate`, `rebindTool`, `stopFileWatchers`
+- From `router.mjs` (re-exports + router-specific): `shellEscape`, `parseInput`, `sendKeys`, `capturePane`, `pasteToPane`, `focusPane`, `getNewContent`, `detectMentions`, `resolveSessionPath`, `setStateDir`, `setDuetMode`, `setRunDir`, `readIncremental`, `isResponseComplete`, `updateRunJson`, `handleNewOutput`, `lastAutoRelayTime`, `downgradeToPane` (no-op), `findRebindCandidate`, `rebindTool`, `stopFileWatchers`, `getRouterState`, `collectDebugSnapshot`, `renderDebugReport`
 - From `src/transport/tmux-client.mjs`: `shellEscape`, `sendKeys`, `capturePane`, `pasteToPane`, `focusPane`, `killSession`, `detachClient`, `displayMessage`
 - From `src/relay/session-reader.mjs`: `sessionState`, `resolveSessionPath`, `readIncremental`, `extractClaudeResponse`, `extractCodexResponse`, `isResponseComplete`, `getLastResponse`, `setDuetMode`
 - From `src/runtime/bindings-store.mjs`: `STATE_DIR`, `setStateDir`, `loadBindings`
+- From `src/debug/debug-report.mjs`: `collectDebugSnapshot`, `renderDebugReport`
 - From `src/runtime/run-store.mjs`: `updateRunJson`, `setRunDir`
 
 ## Key design decisions

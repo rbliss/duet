@@ -6,7 +6,7 @@ import { existsSync } from 'fs';
 import { writeFileSync, mkdirSync, rmSync, appendFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 
-import { shellEscape, parseInput, sendKeys, capturePane, pasteToPane, focusPane, getNewContent, detectMentions, cleanCapture, extractClaudeResponse, extractCodexResponse, isResponseComplete, sessionState, getClaudeLastResponse, getCodexLastResponse, resolveSessionPath, setStateDir, setDuetMode, setRunDir, updateRunJson, readIncremental, handleNewOutput, lastAutoRelayTime, downgradeToPane, findRebindCandidate, rebindTool, stopFileWatchers, extractCodexSessionId, watcherFailed } from './router.mjs';
+import { shellEscape, parseInput, sendKeys, capturePane, pasteToPane, focusPane, getNewContent, detectMentions, cleanCapture, extractClaudeResponse, extractCodexResponse, isResponseComplete, sessionState, getClaudeLastResponse, getCodexLastResponse, resolveSessionPath, setStateDir, setDuetMode, setRunDir, updateRunJson, readIncremental, handleNewOutput, lastAutoRelayTime, downgradeToPane, findRebindCandidate, rebindTool, stopFileWatchers, extractCodexSessionId, watcherFailed, collectDebugSnapshot, renderDebugReport, getRouterState } from './router.mjs';
 import { readFileSync } from 'fs';
 
 // ─── Unit Tests: shellEscape ─────────────────────────────────────────────────
@@ -171,6 +171,30 @@ describe('parseInput', () => {
     assert.deepEqual(parseInput('/converse 1 quick question'), {
       type: 'converse', maxRounds: 1, topic: 'quick question',
     });
+  });
+
+  it('parses /debug', () => {
+    assert.deepEqual(parseInput('/debug'), { type: 'debug', full: false });
+  });
+
+  it('parses /debug full', () => {
+    assert.deepEqual(parseInput('/debug full'), { type: 'debug', full: true });
+  });
+
+  it('parses /send-debug with target', () => {
+    assert.deepEqual(parseInput('/send-debug claude'), {
+      type: 'send-debug', target: 'claude', note: null,
+    });
+  });
+
+  it('parses /send-debug with target and note', () => {
+    assert.deepEqual(parseInput('/send-debug codex relay seems stuck'), {
+      type: 'send-debug', target: 'codex', note: 'relay seems stuck',
+    });
+  });
+
+  it('returns send-debug-error for invalid target', () => {
+    assert.deepEqual(parseInput('/send-debug foo'), { type: 'send-debug-error' });
   });
 });
 
@@ -2666,7 +2690,7 @@ describe('help text includes /rebind', () => {
 describe('session-only automation', () => {
   it('router no longer uses capture-pane for automation relay', () => {
     const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
-    // capturePane call sites (not imports/exports/comments) should only be in /snap
+    // capturePane call sites (not imports/exports/comments) should only be in /snap or /debug diagnostics
     const lines = src.split('\n');
     const callLines = lines.filter(l => {
       const trimmed = l.trim();
@@ -2676,8 +2700,8 @@ describe('session-only automation', () => {
     });
     for (const line of callLines) {
       assert.ok(
-        line.includes('parsed.target') || line.includes('parsed.lines'),
-        `capturePane called outside /snap: ${line.trim()}`
+        line.includes('parsed.target') || line.includes('parsed.lines') || line.includes('PANES.claude') || line.includes('PANES.codex'),
+        `capturePane called outside /snap or /debug: ${line.trim()}`
       );
     }
   });
@@ -2788,18 +2812,18 @@ describe('/watch and /status messaging', () => {
     assert.ok(!src.includes('PANE_STABLE_TICKS'), 'No pane stable ticks constant should remain');
   });
 
-  it('capturePane is only used for /snap diagnostic', () => {
+  it('capturePane is only used for diagnostics (/snap and /debug)', () => {
     const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
     // Find all capturePane calls (excluding imports/exports)
     const lines = src.split('\n');
     const usageLines = lines.filter(l =>
       l.includes('capturePane(') && !l.includes('import') && !l.includes('export'));
-    // Should only be in /snap handler
-    assert.ok(usageLines.length > 0, 'capturePane should still exist for /snap');
+    // Should only be in /snap or /debug handlers
+    assert.ok(usageLines.length > 0, 'capturePane should still exist for diagnostics');
     for (const line of usageLines) {
       assert.ok(
-        line.includes('parsed.target') || line.includes('parsed.lines'),
-        `capturePane used outside /snap: ${line.trim()}`
+        line.includes('parsed.target') || line.includes('parsed.lines') || line.includes('PANES.claude') || line.includes('PANES.codex'),
+        `capturePane used outside diagnostics: ${line.trim()}`
       );
     }
   });
@@ -3006,6 +3030,233 @@ describe('transport delivery failure handling', () => {
     const stateIdx = converseStart.indexOf("converseState = {");
     assert.ok(pasteIdx > 0 && stateIdx > 0, 'both pasteToPane and converseState assignment must exist');
     assert.ok(stateIdx > pasteIdx, `converseState must be set after delivery (paste@${pasteIdx}, state@${stateIdx})`);
+  });
+});
+
+// ─── Unit Tests: debug snapshot API ──────────────────────────────────────────
+
+describe('collectDebugSnapshot', () => {
+  it('returns a well-shaped snapshot with all required fields', () => {
+    const mockSessionState = {
+      claude: { path: '/tmp/claude.jsonl', resolved: true, offset: 100, lastResponse: 'hello', relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: Date.now(), staleDowngraded: false },
+      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+    };
+    const mockRouterState = {
+      watching: true,
+      converseState: null,
+      pendingTools: ['codex'],
+      watcherFailed: [],
+      fileWatcherActive: { claude: true, codex: false },
+    };
+    const snapshot = collectDebugSnapshot({
+      sessionState: mockSessionState,
+      routerState: mockRouterState,
+      bindings: { claude: { status: 'bound', level: 'process', path: '/tmp/claude.jsonl', session_id: 'c-id' }, codex: { status: 'pending' } },
+      runJson: { run_id: 'test-123', cwd: '/tmp', status: 'running', tmux_session: 'duet-test', claude: { session_id: 'c-id', binding_path: '/tmp/claude.jsonl' }, codex: { session_id: 'x-id' } },
+    });
+
+    assert.equal(typeof snapshot.timestamp, 'string');
+    assert.ok(snapshot.run);
+    assert.equal(snapshot.run.run_id, 'test-123');
+    assert.ok(snapshot.router);
+    assert.equal(snapshot.router.watching, true);
+    assert.equal(snapshot.router.converseActive, false);
+    assert.deepEqual(snapshot.router.pendingTools, ['codex']);
+    assert.ok(snapshot.tools.claude);
+    assert.ok(snapshot.tools.codex);
+    // Normalized binding status
+    assert.equal(snapshot.tools.claude.bindingStatus, 'bound');
+    assert.equal(snapshot.tools.claude.relayMode, 'session');
+    assert.equal(snapshot.tools.claude.watcherActive, true);
+    assert.equal(snapshot.tools.codex.bindingStatus, 'pending');
+    assert.equal(snapshot.tools.codex.pending, true);
+    // Cross-file: run.json per tool
+    assert.equal(snapshot.tools.claude.runJson.session_id, 'c-id');
+    assert.equal(snapshot.tools.claude.runJson.binding_path, '/tmp/claude.jsonl');
+    assert.equal(snapshot.tools.codex.runJson.session_id, 'x-id');
+    // Cross-file: bindings.json per tool
+    assert.equal(snapshot.tools.claude.manifest.status, 'bound');
+    assert.equal(snapshot.tools.claude.manifest.level, 'process');
+    assert.equal(snapshot.tools.claude.manifest.session_id, 'c-id');
+    assert.equal(snapshot.tools.codex.manifest.status, 'pending');
+  });
+
+  it('normalizes relayMode to user-facing status', () => {
+    const mockSessionState = {
+      claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'session', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+    };
+    const snapshot = collectDebugSnapshot({
+      sessionState: mockSessionState,
+      routerState: { watching: false, converseState: null, pendingTools: [], watcherFailed: [], fileWatcherActive: { claude: false, codex: false } },
+      bindings: null,
+      runJson: null,
+    });
+    assert.equal(snapshot.tools.claude.bindingStatus, 'bound', 'session relayMode normalizes to bound');
+    assert.equal(snapshot.tools.codex.bindingStatus, 'degraded', 'pane relayMode normalizes to degraded');
+  });
+
+  it('truncates long response previews', () => {
+    const longResponse = 'x'.repeat(1000);
+    const mockSessionState = {
+      claude: { path: null, resolved: false, offset: 0, lastResponse: longResponse, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+    };
+    const snapshot = collectDebugSnapshot({
+      sessionState: mockSessionState,
+      routerState: { watching: false, converseState: null, pendingTools: [], watcherFailed: [], fileWatcherActive: { claude: false, codex: false } },
+      bindings: null,
+      runJson: null,
+    });
+    assert.ok(snapshot.tools.claude.lastResponsePreview.length < longResponse.length);
+    assert.ok(snapshot.tools.claude.lastResponsePreview.includes('more chars'));
+  });
+
+  it('includes converse state when active', () => {
+    const mockSessionState = {
+      claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+    };
+    const snapshot = collectDebugSnapshot({
+      sessionState: mockSessionState,
+      routerState: {
+        watching: true,
+        converseState: { topic: 'test topic', rounds: 3, maxRounds: 10, turn: 'codex' },
+        pendingTools: [],
+        watcherFailed: [],
+        fileWatcherActive: { claude: false, codex: false },
+      },
+      bindings: null,
+      runJson: null,
+    });
+    assert.equal(snapshot.router.converseActive, true);
+    assert.equal(snapshot.router.converse.topic, 'test topic');
+    assert.equal(snapshot.router.converse.round, 3);
+    assert.equal(snapshot.router.converse.turn, 'codex');
+  });
+
+  it('does not include pane captures by default', () => {
+    const mockSessionState = {
+      claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+    };
+    const snapshot = collectDebugSnapshot({
+      sessionState: mockSessionState,
+      routerState: { watching: false, converseState: null, pendingTools: [], watcherFailed: [], fileWatcherActive: { claude: false, codex: false } },
+      bindings: null,
+      runJson: null,
+    });
+    assert.equal(snapshot.paneCaptures, null);
+  });
+
+  it('marks watcher failed status correctly', () => {
+    const mockSessionState = {
+      claude: { path: '/tmp/c.jsonl', resolved: true, offset: 0, lastResponse: null, relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: 0, staleDowngraded: false },
+      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+    };
+    const snapshot = collectDebugSnapshot({
+      sessionState: mockSessionState,
+      routerState: { watching: true, converseState: null, pendingTools: [], watcherFailed: ['claude'], fileWatcherActive: { claude: false, codex: false } },
+      bindings: null,
+      runJson: null,
+    });
+    assert.equal(snapshot.tools.claude.watcherFailed, true);
+    assert.equal(snapshot.tools.claude.watcherActive, false);
+  });
+});
+
+describe('renderDebugReport', () => {
+  it('renders a bounded string with key sections and cross-file state', () => {
+    const snapshot = collectDebugSnapshot({
+      sessionState: {
+        claude: { path: '/tmp/c.jsonl', resolved: true, offset: 42, lastResponse: 'test reply', relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: Date.now(), staleDowngraded: false },
+        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      },
+      routerState: { watching: true, converseState: null, pendingTools: ['codex'], watcherFailed: [], fileWatcherActive: { claude: true, codex: false } },
+      bindings: { claude: { status: 'bound', level: 'process', path: '/tmp/c.jsonl', session_id: 'sid-c' }, codex: { status: 'pending' } },
+      runJson: { run_id: 'r-1', cwd: '/test', status: 'running', tmux_session: 'duet-1', claude: { session_id: 'sid-c', binding_path: '/tmp/c.jsonl' }, codex: {} },
+    });
+    const report = renderDebugReport(snapshot);
+
+    assert.ok(report.includes('DUET DEBUG SNAPSHOT'));
+    assert.ok(report.includes('r-1'));
+    assert.ok(report.includes('[claude]'));
+    assert.ok(report.includes('[codex]'));
+    assert.ok(report.includes('watching'));
+    assert.ok(report.includes('test reply'));
+    assert.ok(report.includes('Pending: codex'));
+    // Cross-file state rendered
+    assert.ok(report.includes('run.json'), 'report should render run.json section');
+    assert.ok(report.includes('bindings'), 'report should render bindings.json section');
+    assert.ok(report.includes('live'), 'report should render live state section');
+    assert.ok(report.includes('sid-c'), 'report should show session ID from run.json/bindings');
+    assert.ok(report.includes('/tmp/c.jsonl'), 'report should show binding path');
+    // Normalized status
+    assert.ok(report.includes('bound'), 'report should show normalized bound status');
+    assert.ok(!report.includes('status: session\n'), 'report should not show raw session as status label');
+  });
+
+  it('report does not contain raw env vars or secrets', () => {
+    process.env.SECRET_KEY = 'super-secret-123';
+    const snapshot = collectDebugSnapshot({
+      sessionState: {
+        claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      },
+      routerState: { watching: false, converseState: null, pendingTools: [], watcherFailed: [], fileWatcherActive: { claude: false, codex: false } },
+      bindings: null,
+      runJson: null,
+    });
+    const report = renderDebugReport(snapshot);
+    assert.ok(!report.includes('super-secret-123'), 'report must not contain env var values');
+    delete process.env.SECRET_KEY;
+  });
+
+  it('report has bounded size even with full mode pane captures', () => {
+    const longCapture = ('A'.repeat(200) + '\n').repeat(100);
+    const snapshot = collectDebugSnapshot({
+      sessionState: {
+        claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      },
+      routerState: { watching: false, converseState: null, pendingTools: [], watcherFailed: [], fileWatcherActive: { claude: false, codex: false } },
+      bindings: null,
+      runJson: null,
+      paneCaptures: { claude: longCapture, codex: longCapture },
+    });
+    const report = renderDebugReport(snapshot);
+    const captureLines = report.split('\n').filter(l => l.startsWith('  A'));
+    assert.ok(captureLines.length <= 60, `expected at most 60 capture lines, got ${captureLines.length}`);
+  });
+
+  it('shows watcher failed as unhealthy in report', () => {
+    const snapshot = collectDebugSnapshot({
+      sessionState: {
+        claude: { path: '/tmp/c.jsonl', resolved: true, offset: 0, lastResponse: null, relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: 0, staleDowngraded: false },
+        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      },
+      routerState: { watching: true, converseState: null, pendingTools: [], watcherFailed: ['claude'], fileWatcherActive: { claude: false, codex: false } },
+      bindings: null,
+      runJson: null,
+    });
+    const report = renderDebugReport(snapshot);
+    assert.ok(report.includes('watcher FAILED'), 'bound + watcher failed must look unhealthy');
+    assert.ok(report.includes('automation inactive'), 'must indicate automation is inactive');
+  });
+
+  it('renders degraded status instead of pane', () => {
+    const snapshot = collectDebugSnapshot({
+      sessionState: {
+        claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      },
+      routerState: { watching: false, converseState: null, pendingTools: [], watcherFailed: [], fileWatcherActive: { claude: false, codex: false } },
+      bindings: { claude: { status: 'degraded' }, codex: { status: 'degraded' } },
+      runJson: null,
+    });
+    const report = renderDebugReport(snapshot);
+    assert.ok(report.includes('degraded'), 'report should show degraded, not pane');
+    assert.ok(!report.includes('status: pane'), 'report must not show raw pane label');
   });
 });
 
@@ -3491,5 +3742,60 @@ describe('e2e: large multiline relay', { timeout: 60000 }, () => {
       'codex inbox should contain end sentinel from relayed response');
     assert.ok(codexInbox.includes('Line 50:'),
       'codex inbox should contain deep interior line (Line 50) proving complete delivery');
+  });
+});
+
+// ─── E2E: /send-debug ─────────────────────────────────────────────────────────
+
+describe('e2e: /send-debug', { timeout: 60000 }, () => {
+  const h = createE2eHarness('debug');
+
+  before(async () => {
+    h.setup();
+    await h.launchDuet();
+    await h.waitForBinding();
+  });
+
+  after(() => h.cleanup());
+
+  it('sends debug snapshot to codex with recognizable content', async () => {
+    await h.sendToRouter('/send-debug codex investigate relay');
+
+    // Wait for codex inbox to receive the debug report
+    await e2eWaitFor(() => {
+      const inbox = h.readInbox('codex');
+      return inbox.includes('DUET DEBUG SNAPSHOT');
+    }, 15000);
+
+    const codexInbox = h.readInbox('codex');
+
+    // Verify debug header present
+    assert.ok(codexInbox.includes('DUET DEBUG SNAPSHOT'),
+      'codex inbox should contain debug snapshot header');
+
+    // Verify binding state info present
+    assert.ok(codexInbox.includes('[claude]'),
+      'debug snapshot should contain claude tool section');
+    assert.ok(codexInbox.includes('[codex]'),
+      'debug snapshot should contain codex tool section');
+
+    // Verify run identifier present
+    const rj = h.readRunJson();
+    assert.ok(codexInbox.includes(rj.run_id),
+      'debug snapshot should contain the run ID');
+
+    // Verify session identifiers present
+    if (rj.claude?.session_id) {
+      assert.ok(codexInbox.includes(rj.claude.session_id),
+        'debug snapshot should contain claude session ID');
+    }
+
+    // Verify the operator note was included
+    assert.ok(codexInbox.includes('investigate relay'),
+      'debug snapshot should contain the operator note');
+
+    // Verify instruction header
+    assert.ok(codexInbox.includes('debug snapshot'),
+      'debug snapshot should contain instruction header');
   });
 });
