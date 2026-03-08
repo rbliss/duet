@@ -18,7 +18,7 @@ export {
 
 // ─── Re-exports: router modules (new) ───────────────────────────────────────
 
-export { parseInput, getNewContent, detectMentions, cleanCapture } from './src/router/commands.mjs';
+export { parseInput, getNewContent, detectMentions, cleanCapture } from './src/router/commands.js';
 export {
   lastAutoRelayTime, watcherFailed,
   isWatching, downgradeToPane, findRebindCandidate, rebindTool,

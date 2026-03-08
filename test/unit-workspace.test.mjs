@@ -15,7 +15,7 @@ import {
   buildToolPrompt,
   listRuns,
   destroyRun,
-} from '../src/runtime/workspace.mjs';
+} from '../src/runtime/workspace.js';
 
 // ─── cwdHash ─────────────────────────────────────────────────────────────────
 

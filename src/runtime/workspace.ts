@@ -1,12 +1,9 @@
 /**
  * Workspace and run management helpers.
  * Ported from duet.sh's bash+python utilities.
- *
- * @typedef {import('../types/runtime.js').ResolveRunResult} ResolveRunResult
- * @typedef {import('../types/runtime.js').WorkspaceIndex} WorkspaceIndex
- * @typedef {import('../types/runtime.js').RunListEntry} RunListEntry
  */
 
+import type { ResolveRunResult, WorkspaceIndex, RunListEntry } from '../types/runtime.js';
 import { createHash } from 'crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
@@ -15,19 +12,14 @@ import { execSync } from 'child_process';
 // ─── cwdHash ─────────────────────────────────────────────────────────────────
 // Matches: echo -n "$1" | md5sum | cut -d' ' -f1
 
-/**
- * @param {string} cwd
- * @returns {string}
- */
-export function cwdHash(cwd) {
+export function cwdHash(cwd: string): string {
   return createHash('md5').update(cwd).digest('hex');
 }
 
 // ─── nowIso ──────────────────────────────────────────────────────────────────
 // Matches: date -u +%Y-%m-%dT%H:%M:%SZ
 
-/** @returns {string} */
-export function nowIso() {
+export function nowIso(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
@@ -35,17 +27,11 @@ export function nowIso() {
 // Matches: run_field() in duet.sh — reads a dotted key from run.json.
 // Returns empty string for null, missing, or dict values.
 
-/**
- * @param {string} runJsonPath
- * @param {string} key
- * @returns {string}
- */
-export function readRunField(runJsonPath, key) {
+export function readRunField(runJsonPath: string, key: string): string {
   try {
     const data = JSON.parse(readFileSync(runJsonPath, 'utf8'));
     const val = key.split('.').reduce(
-      /** @param {unknown} obj @param {string} k @returns {unknown} */
-      (obj, k) => (obj && typeof obj === 'object' && !Array.isArray(obj) ? /** @type {Record<string, unknown>} */ (obj)[k] : undefined),
+      (obj: unknown, k: string): unknown => (obj && typeof obj === 'object' && !Array.isArray(obj) ? (obj as Record<string, unknown>)[k] : undefined),
       data
     );
     if (val === undefined || val === null) return '';
@@ -60,13 +46,8 @@ export function readRunField(runJsonPath, key) {
 // Matches: write_run_json() in duet.sh — merges key-value pairs into a JSON file.
 // Empty string values are stored as null (matching the Python behavior).
 
-/**
- * @param {string} path
- * @param {Record<string, string>} kvPairs
- */
-export function writeRunJson(path, kvPairs) {
-  /** @type {Record<string, unknown>} */
-  let data = {};
+export function writeRunJson(path: string, kvPairs: Record<string, string>): void {
+  let data: Record<string, unknown> = {};
   try {
     if (existsSync(path)) {
       data = JSON.parse(readFileSync(path, 'utf8'));
@@ -77,7 +58,7 @@ export function writeRunJson(path, kvPairs) {
     if (key.includes('.')) {
       const [parent, child] = key.split('.', 2);
       if (!data[parent] || typeof data[parent] !== 'object') data[parent] = {};
-      /** @type {Record<string, unknown>} */ (data[parent])[child] = normalized;
+      (data[parent] as Record<string, unknown>)[child] = normalized;
     } else {
       data[key] = normalized;
     }
@@ -89,20 +70,13 @@ export function writeRunJson(path, kvPairs) {
 // ─── findActiveRun ───────────────────────────────────────────────────────────
 // Matches: find_active_run() in duet.sh — finds the active run for a workspace.
 
-/**
- * @param {string} cwd
- * @param {string} runsDir
- * @param {string} workspacesDir
- * @returns {string | null}
- */
-export function findActiveRun(cwd, runsDir, workspacesDir) {
+export function findActiveRun(cwd: string, runsDir: string, workspacesDir: string): string | null {
   const hash = cwdHash(cwd);
   const idxPath = join(workspacesDir, `${hash}.json`);
   if (!existsSync(idxPath)) return null;
 
   try {
-    /** @type {WorkspaceIndex} */
-    const idx = JSON.parse(readFileSync(idxPath, 'utf8'));
+    const idx: WorkspaceIndex = JSON.parse(readFileSync(idxPath, 'utf8'));
     const runId = idx.active;
     if (!runId) return null;
 
@@ -121,19 +95,12 @@ export function findActiveRun(cwd, runsDir, workspacesDir) {
 // ─── updateWorkspaceIndex ────────────────────────────────────────────────────
 // Matches: update_workspace_index() in duet.sh.
 
-/**
- * @param {string} cwd
- * @param {string} runId
- * @param {boolean | string} active
- * @param {string} workspacesDir
- */
-export function updateWorkspaceIndex(cwd, runId, active, workspacesDir) {
+export function updateWorkspaceIndex(cwd: string, runId: string, active: boolean | string, workspacesDir: string): void {
   const hash = cwdHash(cwd);
   mkdirSync(workspacesDir, { recursive: true });
   const idxPath = join(workspacesDir, `${hash}.json`);
 
-  /** @type {WorkspaceIndex} */
-  let data = { cwd, runs: [], active: null };
+  let data: WorkspaceIndex = { cwd, runs: [], active: null };
   try {
     if (existsSync(idxPath)) {
       data = JSON.parse(readFileSync(idxPath, 'utf8'));
@@ -158,15 +125,9 @@ export function updateWorkspaceIndex(cwd, runId, active, workspacesDir) {
 // Matches: resolve_run_id() in duet.sh.
 // Returns { runId, error } — error is set on ambiguous prefix.
 
-/**
- * @param {string | null | undefined} ref
- * @param {string} runsDir
- * @returns {ResolveRunResult}
- */
-export function resolveRunId(ref, runsDir) {
+export function resolveRunId(ref: string | null | undefined, runsDir: string): ResolveRunResult {
   if (!ref || ref === 'last') {
-    /** @type {string | null} */
-    let latest = null;
+    let latest: string | null = null;
     let latestTime = '';
     try {
       for (const entry of readdirSync(runsDir)) {
@@ -188,8 +149,7 @@ export function resolveRunId(ref, runsDir) {
   }
 
   // Prefix match — require exactly one result
-  /** @type {string[]} */
-  const matches = [];
+  const matches: string[] = [];
   try {
     for (const entry of readdirSync(runsDir)) {
       if (entry.startsWith(ref) && existsSync(join(runsDir, entry, 'run.json'))) {
@@ -213,13 +173,7 @@ export function resolveRunId(ref, runsDir) {
 // ─── buildToolPrompt ─────────────────────────────────────────────────────────
 // Matches: build_tool_prompt() in duet.sh.
 
-/**
- * @param {string} tool
- * @param {string} workdir
- * @param {string} outputPath
- * @param {string} duetMdPath
- */
-export function buildToolPrompt(tool, workdir, outputPath, duetMdPath) {
+export function buildToolPrompt(tool: string, workdir: string, outputPath: string, duetMdPath: string): void {
   const duetMd = readFileSync(duetMdPath, 'utf8');
   let content = duetMd;
 
@@ -242,12 +196,7 @@ export function buildToolPrompt(tool, workdir, outputPath, duetMdPath) {
 // Extract conversation title from Codex SQLite, with fallbacks.
 // Uses python3 for the SQLite query (avoids native module dependency).
 
-/**
- * @param {string | null | undefined} codexHome
- * @param {string | null | undefined} codexSid
- * @returns {string | null}
- */
-export function getCodexTitle(codexHome, codexSid) {
+export function getCodexTitle(codexHome: string | null | undefined, codexSid: string | null | undefined): string | null {
   if (!codexHome || !codexSid) return null;
   const dbPath = join(codexHome, 'state_5.sqlite');
   if (!existsSync(dbPath)) return null;
@@ -280,38 +229,31 @@ else:
 // Matches: cmd_list() inline Python in duet.sh.
 // Returns formatted string output.
 
-/**
- * @param {string} runsDir
- * @param {string} progName
- * @returns {string}
- */
-export function listRuns(runsDir, progName) {
-  /** @type {RunListEntry[]} */
-  const runs = [];
+export function listRuns(runsDir: string, progName: string): string {
+  const runs: RunListEntry[] = [];
   try {
     for (const entry of readdirSync(runsDir)) {
       const rj = join(runsDir, entry, 'run.json');
       if (!existsSync(rj)) continue;
       try {
-        /** @type {Record<string, unknown>} */
-        const data = JSON.parse(readFileSync(rj, 'utf8'));
-        const rid = /** @type {string} */ (data.run_id) || entry;
-        const claude = /** @type {Record<string, string>} */ (data.claude) || {};
-        const codex = /** @type {Record<string, string>} */ (data.codex) || {};
+        const data: Record<string, unknown> = JSON.parse(readFileSync(rj, 'utf8'));
+        const rid = (data.run_id as string) || entry;
+        const claude = (data.claude as Record<string, string>) || {};
+        const codex = (data.codex as Record<string, string>) || {};
         const cSid = claude.session_id || '';
         const xSid = codex.session_id || '';
-        const status = /** @type {string} */ (data.status) || '?';
-        const title = getCodexTitle(/** @type {string} */ (data.codex_home), xSid);
+        const status = (data.status as string) || '?';
+        const title = getCodexTitle(data.codex_home as string, xSid);
         runs.push({
           rid,
           short: rid.slice(0, 8),
           status,
-          mode: /** @type {string} */ (data.mode) || '?',
-          cwd: /** @type {string} */ (data.cwd) || '?',
-          updated: /** @type {string} */ (data.updated_at) || '?',
+          mode: (data.mode as string) || '?',
+          cwd: (data.cwd as string) || '?',
+          updated: (data.updated_at as string) || '?',
           claude: cSid ? cSid.slice(0, 8) + '\u2026' : 'missing',
           codex: xSid ? xSid.slice(0, 8) + '\u2026' : 'missing',
-          tmux: /** @type {string} */ (data.tmux_session) || '',
+          tmux: (data.tmux_session as string) || '',
           title,
           resumable: status === 'stopped' || status === 'detached',
         });
@@ -357,13 +299,7 @@ export function listRuns(runsDir, progName) {
 // ─── destroyRun ──────────────────────────────────────────────────────────────
 // Matches: cmd_destroy() in duet.sh.
 
-/**
- * @param {string} runId
- * @param {string} runsDir
- * @param {string} workspacesDir
- * @param {string | null | undefined} tmuxSocket
- */
-export function destroyRun(runId, runsDir, workspacesDir, tmuxSocket) {
+export function destroyRun(runId: string, runsDir: string, workspacesDir: string, tmuxSocket: string | null | undefined): void {
   const runDir = join(runsDir, runId);
   const runJson = join(runDir, 'run.json');
 

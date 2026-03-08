@@ -11,7 +11,7 @@ import { join } from 'path';
 import { execSync, spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 
-import { setupCodexHome } from './codex-home.mjs';
+import { setupCodexHome } from './codex-home.js';
 import {
   shellQuote,
   createTmuxRunner,
@@ -19,7 +19,7 @@ import {
   launchRouter,
   tmuxHasSession,
   tmuxAttach,
-} from './tmux.mjs';
+} from './tmux.js';
 import { entryPaths, nodeArgs } from '../runtime/entry-paths.js';
 import {
   nowIso,
@@ -31,7 +31,7 @@ import {
   buildToolPrompt,
   listRuns,
   destroyRun,
-} from '../runtime/workspace.mjs';
+} from '../runtime/workspace.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

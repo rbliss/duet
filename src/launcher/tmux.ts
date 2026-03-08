@@ -1,35 +1,19 @@
 /**
  * Synchronous tmux helpers for the launcher.
  * These are one-time setup calls, not hot-path — execFileSync is fine.
- *
- * @typedef {import('../types/runtime.js').TmuxRunner} TmuxRunner
- * @typedef {import('../types/runtime.js').TermSize} TermSize
- * @typedef {import('../types/runtime.js').TmuxLayout} TmuxLayout
- * @typedef {import('../types/runtime.js').LaunchRouterOptions} LaunchRouterOptions
  */
 
+import type { TmuxRunner, TermSize, TmuxLayout, LaunchRouterOptions } from '../types/runtime.js';
 import { execFileSync, spawnSync } from 'child_process';
 import { entryPaths, nodeArgs } from '../runtime/entry-paths.js';
 
-/**
- * Shell-quote a string for safe interpolation into commands typed into tmux panes.
- * Uses POSIX single-quote wrapping: wrap in '' and escape internal ' as '\''
- * @param {string} s
- * @returns {string}
- */
-export function shellQuote(s) {
+export function shellQuote(s: string): string {
   if (s === '') return "''";
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
-/**
- * Create a tmux runner that optionally uses a custom socket.
- * Returns a function that calls tmux with the given args and returns stdout.
- * @param {string | undefined} socket
- * @returns {TmuxRunner}
- */
-export function createTmuxRunner(socket) {
-  return function tmux(/** @type {string[]} */ ...args) {
+export function createTmuxRunner(socket: string | undefined): TmuxRunner {
+  return function tmux(...args: string[]) {
     const fullArgs = socket ? ['-S', socket, ...args] : args;
     return execFileSync('tmux', fullArgs, {
       encoding: 'utf8',
@@ -38,11 +22,7 @@ export function createTmuxRunner(socket) {
   };
 }
 
-/**
- * Get terminal dimensions from env vars, tput, or defaults.
- * @returns {TermSize}
- */
-export function getTermSize() {
+export function getTermSize(): TermSize {
   let cols = parseInt(process.env.COLUMNS || '', 10);
   if (!cols || isNaN(cols)) {
     try {
@@ -62,13 +42,7 @@ export function getTermSize() {
   return { cols, lines };
 }
 
-/**
- * Create the 3-pane tmux layout with styling.
- * @param {TmuxRunner} tmux
- * @param {string} session
- * @returns {TmuxLayout}
- */
-export function createTmuxLayout(tmux, session) {
+export function createTmuxLayout(tmux: TmuxRunner, session: string): TmuxLayout {
   try { tmux('kill-session', '-t', session); } catch {}
 
   const { cols, lines } = getTermSize();
@@ -104,13 +78,7 @@ export function createTmuxLayout(tmux, session) {
   return { claudePane, codexPane, routerPane };
 }
 
-/**
- * Launch the router process in the bottom pane.
- * @param {TmuxRunner} tmux
- * @param {string} routerPane
- * @param {LaunchRouterOptions} options
- */
-export function launchRouter(tmux, routerPane, { session, runDir, mode, claudePane, codexPane }) {
+export function launchRouter(tmux: TmuxRunner, routerPane: string, { session, runDir, mode, claudePane, codexPane }: LaunchRouterOptions): void {
   const qRunDir = shellQuote(runDir);
   const nodeCmd = ['node', ...nodeArgs, shellQuote(entryPaths.router)].join(' ');
   const cmd = `DUET_SESSION=${shellQuote(session)} CLAUDE_PANE=${claudePane} CODEX_PANE=${codexPane} DUET_STATE_DIR=${qRunDir} DUET_MODE=${mode} DUET_RUN_DIR=${qRunDir} ${nodeCmd}`;
@@ -118,13 +86,7 @@ export function launchRouter(tmux, routerPane, { session, runDir, mode, claudePa
   tmux('select-pane', '-t', routerPane);
 }
 
-/**
- * Check if a tmux session exists.
- * @param {TmuxRunner} tmux
- * @param {string} session
- * @returns {boolean}
- */
-export function tmuxHasSession(tmux, session) {
+export function tmuxHasSession(tmux: TmuxRunner, session: string): boolean {
   try {
     tmux('has-session', '-t', session);
     return true;
@@ -133,14 +95,7 @@ export function tmuxHasSession(tmux, session) {
   }
 }
 
-/**
- * Attach to a tmux session (blocks until detach).
- * Returns the exit code; callers should propagate failure.
- * @param {string} session
- * @param {string | undefined} socket
- * @returns {number}
- */
-export function tmuxAttach(session, socket) {
+export function tmuxAttach(session: string, socket: string | undefined): number {
   const args = socket
     ? ['-S', socket, 'attach', '-t', session]
     : ['attach', '-t', session];

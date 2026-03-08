@@ -114,14 +114,14 @@ for run in runs:
   });
 
   it('shows resume hint for stopped runs only', () => {
-    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
+    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.ts', 'utf8');
     assert.ok(ws.includes("'stopped'") && ws.includes("'detached'"));
     assert.ok(ws.includes('resumable'));
     assert.ok(ws.includes("resume:"));
   });
 
   it('extracts codex title from SQLite threads table', () => {
-    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
+    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.ts', 'utf8');
     assert.ok(ws.includes('getCodexTitle'));
     assert.ok(ws.includes('state_5.sqlite'));
     assert.ok(ws.includes('SELECT title, first_user_message FROM threads'));
@@ -151,13 +151,13 @@ for rj in runs_dir.glob('*/run.json'):
   });
 
   it('truncates long titles with ellipsis', () => {
-    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
+    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.ts', 'utf8');
     assert.ok(ws.includes('MAX_TITLE'));
     assert.ok(ws.includes('72'));
   });
 
   it('shows shortened session IDs', () => {
-    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
+    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.ts', 'utf8');
     assert.ok(ws.includes('.slice(0, 8)'));
   });
 
@@ -177,7 +177,7 @@ for rj in runs_dir.glob('*/run.json'):
     });
 
     const output = execSync(
-      `DUET_BASE="${testDir}" node /home/claude/duet/src/cli/run-ops.mjs list-runs "duet.sh"`,
+      `DUET_BASE="${testDir}" node --import tsx/esm /home/claude/duet/src/cli/run-ops.mjs list-runs "duet.sh"`,
       { encoding: 'utf8' }
     ).trim();
 
@@ -202,7 +202,7 @@ for rj in runs_dir.glob('*/run.json'):
     mkdirSync(runsDir, { recursive: true });
 
     const output = execSync(
-      `DUET_BASE="${testDir}" node /home/claude/duet/src/cli/run-ops.mjs list-runs "duet.sh"`,
+      `DUET_BASE="${testDir}" node --import tsx/esm /home/claude/duet/src/cli/run-ops.mjs list-runs "duet.sh"`,
       { encoding: 'utf8' }
     ).trim();
 
@@ -214,7 +214,7 @@ for rj in runs_dir.glob('*/run.json'):
 
 describe('role prompt injection', () => {
   const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
-  const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
+  const ws = readFileSync('/home/claude/duet/src/runtime/workspace.ts', 'utf8');
 
   it('buildToolPrompt handles role files', () => {
     assert.ok(ws.includes('CLAUDE_ROLE.md'));
@@ -444,12 +444,12 @@ describe('shell quoting for paths with spaces', () => {
   it('JS launcher uses shellQuote for interpolated paths', () => {
     const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
     assert.ok(commands.includes('shellQuote'), 'commands.mjs should use shellQuote');
-    const tmuxMod = readFileSync('/home/claude/duet/src/launcher/tmux.mjs', 'utf8');
+    const tmuxMod = readFileSync('/home/claude/duet/src/launcher/tmux.ts', 'utf8');
     assert.ok(tmuxMod.includes('shellQuote'), 'tmux.mjs should define shellQuote');
   });
 
   it('launchRouter uses shellQuote for paths', () => {
-    const tmuxMod = readFileSync('/home/claude/duet/src/launcher/tmux.mjs', 'utf8');
+    const tmuxMod = readFileSync('/home/claude/duet/src/launcher/tmux.ts', 'utf8');
     const routerBlock = tmuxMod.slice(
       tmuxMod.indexOf('export function launchRouter'),
       tmuxMod.indexOf('export function launchRouter') + 600
@@ -458,7 +458,7 @@ describe('shell quoting for paths with spaces', () => {
   });
 
   it('tmuxAttach propagates exit status', () => {
-    const tmuxMod = readFileSync('/home/claude/duet/src/launcher/tmux.mjs', 'utf8');
+    const tmuxMod = readFileSync('/home/claude/duet/src/launcher/tmux.ts', 'utf8');
     const attachBlock = tmuxMod.slice(tmuxMod.indexOf('export function tmuxAttach'));
     assert.ok(attachBlock.includes('result.status'), 'tmuxAttach should return exit status');
     const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
@@ -515,7 +515,7 @@ describe('codex fast-path requires session ID for resume', () => {
 
 describe('ambiguous run-id prefix handling', () => {
   it('resolveRunId errors on ambiguous prefix', () => {
-    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
+    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.ts', 'utf8');
     assert.ok(ws.includes('ambiguous prefix'), 'JS module should error on ambiguous prefix');
     const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
     assert.ok(commands.includes('resolveRunId'), 'commands.mjs should use resolveRunId');
@@ -580,11 +580,11 @@ describe('setupCodexHome isolation', () => {
   const fakeCodexDir = join(fakeHome, '.codex');
   const codexHome = join(testDir, 'codex-home');
 
-  /** @type {typeof import('../src/launcher/codex-home.mjs').setupCodexHome} */
+  /** @type {typeof import('../src/launcher/codex-home.js').setupCodexHome} */
   let setupCodexHome;
 
   before(async () => {
-    const mod = await import('../src/launcher/codex-home.mjs');
+    const mod = await import('../src/launcher/codex-home.js');
     setupCodexHome = mod.setupCodexHome;
 
     mkdirSync(fakeCodexDir, { recursive: true });

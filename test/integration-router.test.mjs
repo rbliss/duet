@@ -9,7 +9,7 @@ import { parseInput, sessionState, handleNewOutput, lastAutoRelayTime, downgrade
 // Read all router source files (equivalent to the old monolithic router.mjs)
 function readRouterSource() {
   return [
-    readFileSync('/home/claude/duet/src/router/commands.mjs', 'utf8'),
+    readFileSync('/home/claude/duet/src/router/commands.ts', 'utf8'),
     readFileSync('/home/claude/duet/src/router/state.mjs', 'utf8'),
     readFileSync('/home/claude/duet/src/router/controller.mjs', 'utf8'),
   ].join('\n');

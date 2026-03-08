@@ -9,7 +9,7 @@
 import { createInterface } from 'readline';
 import { rmSync } from 'fs';
 
-import { parseInput, detectMentions } from './commands.mjs';
+import { parseInput, detectMentions } from './commands.js';
 import {
   C, SESSION, PANES, RELAY_COOLDOWN_MS,
   lastAutoRelayTime, watcherFailed,

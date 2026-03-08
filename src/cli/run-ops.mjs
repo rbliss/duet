@@ -25,7 +25,7 @@ import {
   buildToolPrompt,
   listRuns,
   destroyRun,
-} from '../runtime/workspace.mjs';
+} from '../runtime/workspace.js';
 
 const DUET_BASE = process.env.DUET_BASE || `${process.env.HOME || ''}/.local/state/duet`;
 const RUNS_DIR = `${DUET_BASE}/runs`;

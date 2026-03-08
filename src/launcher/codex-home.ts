@@ -9,22 +9,12 @@ import { join } from 'path';
 const CONFIG_FILES = ['auth.json', 'config.toml', 'version.json'];
 const CONFIG_DIRS = ['rules', 'skills'];
 
-/**
- * Force-create a symlink (unlink + symlink for ln -sf parity).
- * @param {string} target
- * @param {string} linkPath
- */
-function forceSymlink(target, linkPath) {
+function forceSymlink(target: string, linkPath: string): void {
   try { unlinkSync(linkPath); } catch {}
   symlinkSync(target, linkPath);
 }
 
-/**
- * Set up a CODEX_HOME overlay with read-only config symlinks.
- * @param {string} codexHome - Path to the isolated CODEX_HOME directory
- * @param {string} [homeDir] - Override HOME for testing (defaults to process.env.HOME)
- */
-export function setupCodexHome(codexHome, homeDir) {
+export function setupCodexHome(codexHome: string, homeDir?: string): void {
   const home = homeDir || process.env.HOME || '';
   const codexDir = join(home, '.codex');
 
