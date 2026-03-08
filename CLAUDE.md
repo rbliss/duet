@@ -14,7 +14,8 @@ src/
   runtime/bindings-store.mjs    Binding manifest loader (STATE_DIR, loadBindings)
   runtime/run-store.mjs         Run manifest updates (updateRunJson, setRunDir)
   debug/debug-report.mjs        Debug snapshot collection and rendering
-test.mjs            Test suite (265 tests, 54 suites) — run with: node --test test.mjs
+test/               Test suite (267 tests, 53 suites) — run with: node --test
+test-support/       Shared test helpers, fake agents, e2e harness
 DUET.md             System prompt injected into both tools at launch
 README.md           User-facing documentation
 docs/
@@ -137,7 +138,7 @@ Node.js process providing the interactive command interface. Pure manifest consu
 ## Testing
 
 ```bash
-node --test test.mjs
+node --test
 ```
 
 Tests use Node's built-in test runner. Integration tests create real tmux sessions. The binding contract tests run `bind-sessions.sh` with `BIND_TIMEOUT=2` (1 second) to test the full lifecycle quickly.
@@ -163,7 +164,7 @@ Key test patterns:
 
 ## Common workflows
 
-**Run tests**: `node --test test.mjs`
+**Run tests**: `node --test`
 
 **Launch duet**: `~/duet/duet.sh [workdir]`
 

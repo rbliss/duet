@@ -156,7 +156,7 @@ Both CLIs run as full interactive processes in their own pseudo-terminals. Duet 
 ## Tests
 
 ```bash
-cd ~/duet && node --test test.mjs
+cd ~/duet && node --test
 ```
 
 213 tests across 43 suites: shell escaping, input parsing (including converse/watch/stop), content diffing (`getNewContent`), @mention detection (`detectMentions`), tmux integration (sendKeys, capturePane, pasteToPane, focusPane, cross-pane relay), launcher layout, response extraction (Claude and Codex formats), completion detection (`isResponseComplete`), incremental session reader, end-to-end session binding (bindings.json manifest), binding lifecycle (manifest caching and re-reads), launcher binding contract (bind-sessions.sh with fallback coverage), session-only automation enforcement, explicit binding enforcement, watch/status messaging, and edge cases. Integration tests run against real tmux sessions.

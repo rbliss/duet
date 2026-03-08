@@ -3420,7 +3420,7 @@ function createE2eHarness(tag, extraEnv = {}) {
       mkdirSync(join(fakeHome, '.codex'), { recursive: true });
 
       const nodeExe = process.execPath;
-      const fixturesDir = join(import.meta.dirname, 'test', 'fixtures');
+      const fixturesDir = join(import.meta.dirname, 'test-support');
       writeFileSync(join(fakeBin, 'claude'),
         `#!/bin/sh\nexec "${nodeExe}" "${fixturesDir}/fake-claude.mjs" "$@"\n`, { mode: 0o755 });
       writeFileSync(join(fakeBin, 'codex'),
