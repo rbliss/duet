@@ -3009,146 +3009,209 @@ describe('transport delivery failure handling', () => {
   });
 });
 
-// ─── E2E integration tests with fake agents ──────────────────────────────────
+// ─── E2E shared harness ───────────────────────────────────────────────────────
 
-describe('e2e: headless duet with fake agents', { timeout: 60000 }, () => {
-  const testId = `e2e-${process.pid}`;
+function e2eSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function e2eWaitFor(fn, timeoutMs = 15000, intervalMs = 300) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = fn();
+    if (result) return result;
+    await e2eSleep(intervalMs);
+  }
+  throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+}
+
+function e2eExecAsync(cmd) {
+  return new Promise((resolve, reject) => {
+    exec(cmd, { encoding: 'utf8', env: tmuxEnv }, (err, stdout, stderr) => {
+      if (err) reject(err); else resolve({ stdout, stderr });
+    });
+  });
+}
+
+// Find router pane by title instead of assuming position
+async function findRouterPane(session) {
+  const { stdout } = await e2eExecAsync(
+    `tmux -S ${TEST_TMUX_SOCKET} list-panes -t "${session}" -F "#{pane_id} #{pane_title}" 2>/dev/null`
+  );
+  for (const line of stdout.trim().split('\n')) {
+    const [id, ...rest] = line.split(' ');
+    if (rest.join(' ') === 'Duet Router') return id;
+  }
+  // Fallback: last pane
+  const panes = stdout.trim().split('\n');
+  return panes[panes.length - 1].split(' ')[0];
+}
+
+// Create an isolated e2e environment and return helpers
+function createE2eHarness(tag, extraEnv = {}) {
+  const testId = `e2e-${tag}-${process.pid}`;
   const tempBase = `/tmp/duet-${testId}`;
   const fakeHome = join(tempBase, 'home');
   const fakeBin = join(tempBase, 'bin');
   const workDir = join(tempBase, 'workspace');
   const inboxDir = join(tempBase, 'inbox');
   const duetBase = join(fakeHome, '.local', 'state', 'duet');
-  let tmuxSession = null;
-  let runDir = null;
 
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+  const h = {
+    tempBase, fakeHome, fakeBin, workDir, inboxDir, duetBase,
+    tmuxSession: null,
+    runDir: null,
+    runId: null,
 
-  async function waitFor(fn, timeoutMs = 15000, intervalMs = 300) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const result = fn();
-      if (result) return result;
-      await sleep(intervalMs);
-    }
-    throw new Error(`waitFor timed out after ${timeoutMs}ms`);
-  }
+    findRunDir() {
+      const runsDir = join(duetBase, 'runs');
+      try {
+        for (const d of readdirSync(runsDir)) {
+          const rj = join(runsDir, d, 'run.json');
+          if (existsSync(rj)) return join(runsDir, d);
+        }
+      } catch {}
+      return null;
+    },
 
-  function findRunDir() {
-    const runsDir = join(duetBase, 'runs');
-    try {
-      for (const d of readdirSync(runsDir)) {
-        const rj = join(runsDir, d, 'run.json');
-        if (existsSync(rj)) return join(runsDir, d);
-      }
-    } catch {}
-    return null;
-  }
+    findRunDirById(id) {
+      const rj = join(duetBase, 'runs', id, 'run.json');
+      return existsSync(rj) ? join(duetBase, 'runs', id) : null;
+    },
 
-  function readBindings() {
-    if (!runDir) return null;
-    const bp = join(runDir, 'bindings.json');
-    try { return JSON.parse(readFileSync(bp, 'utf8')); } catch { return null; }
-  }
+    readRunJson() {
+      if (!h.runDir) return null;
+      try { return JSON.parse(readFileSync(join(h.runDir, 'run.json'), 'utf8')); } catch { return null; }
+    },
 
-  function bothBound() {
-    const b = readBindings();
-    return b && b.claude?.status === 'bound' && b.codex?.status === 'bound' ? b : null;
-  }
+    readBindings() {
+      if (!h.runDir) return null;
+      try { return JSON.parse(readFileSync(join(h.runDir, 'bindings.json'), 'utf8')); } catch { return null; }
+    },
 
-  function readInbox(tool) {
-    try { return readFileSync(join(inboxDir, `${tool}-inbox.log`), 'utf8'); } catch { return ''; }
-  }
+    bothBound() {
+      const b = h.readBindings();
+      return b && b.claude?.status === 'bound' && b.codex?.status === 'bound' ? b : null;
+    },
 
-  async function sendToRouter(text) {
-    // Find the router pane (third pane in session) — uses isolated tmux socket
-    const { stdout } = await e2eExecAsync(
-      `tmux -S ${TEST_TMUX_SOCKET} list-panes -t "${tmuxSession}" -F "#{pane_id}" 2>/dev/null`
-    );
-    const panes = stdout.trim().split('\n');
-    const routerPane = panes[panes.length - 1]; // bottom pane
-    // pasteToPane uses tmuxCmd() which reads DUET_TMUX_SOCKET from process.env
-    await pasteToPane(routerPane, text);
-  }
+    readInbox(tool) {
+      try { return readFileSync(join(inboxDir, `${tool}-inbox.log`), 'utf8'); } catch { return ''; }
+    },
 
-  async function e2eExecAsync(cmd) {
-    return new Promise((resolve, reject) => {
-      exec(cmd, { encoding: 'utf8', env: tmuxEnv }, (err, stdout, stderr) => {
-        if (err) reject(err); else resolve({ stdout, stderr });
+    // Read startup log entries written by fake agents (one JSON per line)
+    readStartupLog(tool) {
+      try {
+        return readFileSync(join(inboxDir, `${tool}-startup.log`), 'utf8')
+          .trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+      } catch { return []; }
+    },
+
+    clearStartupLogs() {
+      try { rmSync(join(inboxDir, 'claude-startup.log')); } catch {}
+      try { rmSync(join(inboxDir, 'codex-startup.log')); } catch {}
+    },
+
+    async sendToRouter(text) {
+      const routerPane = await findRouterPane(h.tmuxSession);
+      await pasteToPane(routerPane, text);
+    },
+
+    buildEnv() {
+      return sanitizedEnv({
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        HOME: fakeHome,
+        DUET_BASE: duetBase,
+        DUET_NO_ATTACH: '1',
+        DUET_TMUX_SOCKET: TEST_TMUX_SOCKET,
+        DUET_INBOX_DIR: inboxDir,
+        TMUX: '',
+        BIND_TIMEOUT: '10',
+        COLUMNS: '120',
+        LINES: '40',
+        ...extraEnv,
       });
-    });
-  }
+    },
+
+    async launchDuet(args = '') {
+      const duetScript = join(import.meta.dirname, 'duet.sh');
+      const cmd = `bash "${duetScript}" ${args || `"${workDir}"`}`;
+      try {
+        execSync(cmd, { encoding: 'utf8', env: h.buildEnv(), timeout: 10000 });
+      } catch {}
+
+      await e2eWaitFor(() => {
+        h.runDir = h.findRunDir();
+        return h.runDir;
+      }, 5000);
+
+      const rj = h.readRunJson();
+      h.tmuxSession = rj.tmux_session;
+      h.runId = rj.run_id;
+    },
+
+    async waitForBinding(timeoutMs = 20000) {
+      await e2eWaitFor(() => h.bothBound(), timeoutMs, 500);
+    },
+
+    // Dump diagnostics on failure
+    dumpDiagnostics() {
+      console.log('--- E2E DIAGNOSTICS ---');
+      try { console.log('bindings.json:', JSON.stringify(h.readBindings(), null, 2)); } catch {}
+      try { console.log('run.json:', JSON.stringify(h.readRunJson(), null, 2)); } catch {}
+      try { console.log('claude inbox:', h.readInbox('claude').slice(-500)); } catch {}
+      try { console.log('codex inbox:', h.readInbox('codex').slice(-500)); } catch {}
+      console.log('--- END DIAGNOSTICS ---');
+    },
+
+    setup() {
+      mkdirSync(fakeBin, { recursive: true });
+      mkdirSync(workDir, { recursive: true });
+      mkdirSync(inboxDir, { recursive: true });
+      mkdirSync(join(fakeHome, '.claude', 'projects'), { recursive: true });
+      mkdirSync(join(fakeHome, '.codex'), { recursive: true });
+
+      const nodeExe = process.execPath;
+      const fixturesDir = join(import.meta.dirname, 'test', 'fixtures');
+      writeFileSync(join(fakeBin, 'claude'),
+        `#!/bin/sh\nexec "${nodeExe}" "${fixturesDir}/fake-claude.mjs" "$@"\n`, { mode: 0o755 });
+      writeFileSync(join(fakeBin, 'codex'),
+        `#!/bin/sh\nexec "${nodeExe}" "${fixturesDir}/fake-codex.mjs" "$@"\n`, { mode: 0o755 });
+    },
+
+    cleanup() {
+      if (h.tmuxSession) {
+        try { execSync(`tmux -S ${TEST_TMUX_SOCKET} kill-session -t "${h.tmuxSession}" 2>/dev/null`, { env: tmuxEnv, stdio: 'ignore' }); } catch {}
+      }
+      rmSync(tempBase, { recursive: true, force: true });
+    },
+  };
+
+  return h;
+}
+
+// ─── E2E integration tests with fake agents ──────────────────────────────────
+
+describe('e2e: headless duet with fake agents', { timeout: 60000 }, () => {
+  const h = createE2eHarness('basic');
 
   before(async () => {
-    // Set up temp dirs
-    mkdirSync(fakeBin, { recursive: true });
-    mkdirSync(workDir, { recursive: true });
-    mkdirSync(inboxDir, { recursive: true });
-    mkdirSync(join(fakeHome, '.claude', 'projects'), { recursive: true });
-    mkdirSync(join(fakeHome, '.codex'), { recursive: true });
-
-    // Create fake agent wrappers
-    const nodeExe = process.execPath;
-    const fixturesDir = join(import.meta.dirname, 'test', 'fixtures');
-    writeFileSync(join(fakeBin, 'claude'),
-      `#!/bin/sh\nexec "${nodeExe}" "${fixturesDir}/fake-claude.mjs" "$@"\n`, { mode: 0o755 });
-    writeFileSync(join(fakeBin, 'codex'),
-      `#!/bin/sh\nexec "${nodeExe}" "${fixturesDir}/fake-codex.mjs" "$@"\n`, { mode: 0o755 });
-
-    // Launch duet headlessly on isolated tmux socket
-    const duetScript = join(import.meta.dirname, 'duet.sh');
-    const env = {
-      ...process.env,
-      PATH: `${fakeBin}:${process.env.PATH}`,
-      HOME: fakeHome,
-      DUET_BASE: duetBase,
-      DUET_NO_ATTACH: '1',
-      DUET_TMUX_SOCKET: TEST_TMUX_SOCKET,
-      DUET_INBOX_DIR: inboxDir,
-      TMUX: '',
-      BIND_TIMEOUT: '10',
-      COLUMNS: '120',
-      LINES: '40',
-    };
-    try {
-      execSync(`bash "${duetScript}" "${workDir}"`, { encoding: 'utf8', env, timeout: 10000 });
-    } catch {}
-
-    // Discover the run dir and tmux session
-    await waitFor(() => {
-      runDir = findRunDir();
-      return runDir;
-    }, 5000);
-
-    const rj = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8'));
-    tmuxSession = rj.tmux_session;
-
-    // Wait for both agents to bind
-    await waitFor(bothBound, 20000, 500);
+    h.setup();
+    await h.launchDuet();
+    await h.waitForBinding();
   });
 
-  after(async () => {
-    if (tmuxSession) {
-      try { execSync(`tmux -S ${TEST_TMUX_SOCKET} kill-session -t "${tmuxSession}" 2>/dev/null`, { env: tmuxEnv }); } catch {}
-    }
-    rmSync(tempBase, { recursive: true, force: true });
-    // Clean up workspace index
-    try { rmSync(join(duetBase, 'workspaces'), { recursive: true, force: true }); } catch {}
-  });
+  after(() => h.cleanup());
 
   it('launches headlessly and both agents bind', () => {
-    assert.ok(runDir, 'run dir should exist');
-    assert.ok(tmuxSession, 'tmux session should exist');
-    const b = readBindings();
+    assert.ok(h.runDir, 'run dir should exist');
+    assert.ok(h.tmuxSession, 'tmux session should exist');
+    const b = h.readBindings();
     assert.equal(b.claude.status, 'bound');
     assert.equal(b.codex.status, 'bound');
   });
 
   it('codex binding has payload.id different from filename', () => {
-    const b = readBindings();
+    const b = h.readBindings();
     assert.ok(b.codex.path, 'codex should have a binding path');
     assert.ok(b.codex.session_id, 'codex should have a session_id');
-    // Filename should NOT match session_id (payload.id)
     const filename = b.codex.path.split('/').pop().replace('.jsonl', '');
     assert.notEqual(filename, b.codex.session_id,
       'codex filename should differ from payload.id');
@@ -3156,56 +3219,277 @@ describe('e2e: headless duet with fake agents', { timeout: 60000 }, () => {
 
   it('manual relay: @claude delivers to fake claude', async () => {
     const token = `MANUAL_${Date.now()}`;
-    await sendToRouter(`@claude ${token}`);
-    // Wait for fake claude to log it
-    await waitFor(() => readInbox('claude').includes(token), 8000);
-    assert.ok(readInbox('claude').includes(token));
+    await h.sendToRouter(`@claude ${token}`);
+    await e2eWaitFor(() => h.readInbox('claude').includes(token), 8000);
+    assert.ok(h.readInbox('claude').includes(token));
   });
 
   it('manual relay: @relay claude>codex delivers structured response', async () => {
     const token = `RELAY_${Date.now()}`;
-    // Send to claude first
-    await sendToRouter(`@claude ${token}`);
-    await waitFor(() => readInbox('claude').includes(token), 8000);
+    await h.sendToRouter(`@claude ${token}`);
+    await e2eWaitFor(() => h.readInbox('claude').includes(token), 8000);
 
-    // Give session log time to update
-    await sleep(1000);
+    await e2eSleep(1000);
 
-    // Relay to codex
-    await sendToRouter(`@relay claude>codex check this`);
+    await h.sendToRouter(`@relay claude>codex check this`);
 
-    // Wait for codex to receive the relay
-    await waitFor(() => {
-      const inbox = readInbox('codex');
+    await e2eWaitFor(() => {
+      const inbox = h.readInbox('codex');
       return inbox.includes('claude says') || inbox.includes(token);
     }, 10000);
-    const codexInbox = readInbox('codex');
+    const codexInbox = h.readInbox('codex');
     assert.ok(codexInbox.includes('claude says') || codexInbox.includes(token),
       'codex should receive relayed claude response');
   });
 
   it('watch mode: auto-relays @codex mention from claude to codex', async () => {
-    // Start watch mode
-    await sendToRouter('/watch');
-    await sleep(1000);
+    await h.sendToRouter('/watch');
+    await e2eSleep(1000);
 
-    // Send message that triggers fake claude to mention @codex
     const token = `MENTION_CODEX_${Date.now()}`;
-    await sendToRouter(`@claude ${token}`);
+    await h.sendToRouter(`@claude ${token}`);
 
-    // Fake claude will respond with "@codex" in the text
-    // Router watcher should detect it and auto-relay to codex
-    // Wait for the specific token (not generic 'claude says' which may exist from prior tests)
-    await waitFor(() => {
-      const inbox = readInbox('codex');
+    await e2eWaitFor(() => {
+      const inbox = h.readInbox('codex');
       return inbox.includes(token);
     }, 20000);
 
-    const codexInbox = readInbox('codex');
+    const codexInbox = h.readInbox('codex');
     assert.ok(codexInbox.includes(token),
       'codex should receive auto-relayed message containing the mention token');
 
-    // Stop watch
-    await sendToRouter('/stop');
+    await h.sendToRouter('/stop');
+  });
+});
+
+// ─── E2E: Late-binding activation ─────────────────────────────────────────────
+
+describe('e2e: late-binding activation', { timeout: 60000 }, () => {
+  const h = createE2eHarness('latebind', {
+    FAKE_CLAUDE_BIND_DELAY_MS: '3000',
+    FAKE_CODEX_BIND_DELAY_MS: '3000',
+  });
+
+  before(async () => {
+    h.setup();
+    await h.launchDuet();
+  });
+
+  after(() => h.cleanup());
+
+  it('starts with pending bindings', () => {
+    // At launch, bindings should be pending since agents delay log creation
+    // (bindings may already have transitioned if the binder polled after the delay)
+    // We just verify the run dir exists and the manifest was created
+    assert.ok(h.runDir, 'run dir should exist');
+    const b = h.readBindings();
+    assert.ok(b, 'bindings.json should exist');
+    assert.ok(b.claude, 'claude binding entry should exist');
+    assert.ok(b.codex, 'codex binding entry should exist');
+  });
+
+  it('transitions to bound after delay', async () => {
+    // Wait for binding to resolve (3s agent delay + binder poll interval)
+    await h.waitForBinding(25000);
+    const b = h.readBindings();
+    assert.equal(b.claude.status, 'bound', 'claude should be bound');
+    assert.equal(b.codex.status, 'bound', 'codex should be bound');
+  });
+
+  it('session-driven relay works after late binding', async () => {
+    // Send to claude, then use @relay to prove session-based automation is active
+    const token = `LATEBIND_${Date.now()}`;
+    await h.sendToRouter(`@claude ${token}`);
+    await e2eWaitFor(() => h.readInbox('claude').includes(token), 10000);
+
+    // Give session log time to be written
+    await e2eSleep(1000);
+
+    // @relay reads from session log — proves watcher started after late binding
+    await h.sendToRouter(`@relay claude>codex verify late binding`);
+    await e2eWaitFor(() => {
+      const inbox = h.readInbox('codex');
+      return inbox.includes('claude says') || inbox.includes(token);
+    }, 15000);
+
+    const codexInbox = h.readInbox('codex');
+    assert.ok(codexInbox.includes('claude says') || codexInbox.includes(token),
+      'codex should receive session-driven relay after late binding');
+  });
+});
+
+// ─── E2E: Resume ──────────────────────────────────────────────────────────────
+
+describe('e2e: resume run', { timeout: 90000 }, () => {
+  const h = createE2eHarness('resume');
+  let originalRunId, originalClaudeSid, originalCodexSid;
+
+  before(async () => {
+    h.setup();
+
+    // Phase 1: launch and interact
+    await h.launchDuet();
+    await h.waitForBinding();
+
+    const rj = h.readRunJson();
+    originalRunId = rj.run_id;
+    originalClaudeSid = rj.claude.session_id;
+    originalCodexSid = h.readBindings().codex.session_id;
+
+    // Send a message so there's transcript history
+    const token = `PRE_RESUME_${Date.now()}`;
+    await h.sendToRouter(`@claude ${token}`);
+    await e2eWaitFor(() => h.readInbox('claude').includes(token), 8000);
+    await e2eSleep(1000);
+
+    // Phase 2: stop the run (kill tmux session, mark as stopped)
+    try {
+      execSync(
+        `tmux -S ${TEST_TMUX_SOCKET} kill-session -t "${h.tmuxSession}" 2>/dev/null`,
+        { env: tmuxEnv, stdio: 'ignore' }
+      );
+    } catch {}
+
+    // Write stopped status to run.json (normally /quit does this via the router)
+    const runJsonPath = join(h.runDir, 'run.json');
+    const data = JSON.parse(readFileSync(runJsonPath, 'utf8'));
+    data.status = 'stopped';
+    data.updated_at = new Date().toISOString();
+    // Store binding paths in run.json (normally updateRunJson does this)
+    const bindings = h.readBindings();
+    if (bindings.claude?.path) data.claude.binding_path = bindings.claude.path;
+    if (bindings.codex?.path) data.codex.binding_path = bindings.codex.path;
+    if (originalCodexSid) data.codex.session_id = originalCodexSid;
+    writeFileSync(runJsonPath, JSON.stringify(data, null, 2));
+
+    await e2eSleep(500);
+
+    // Clear inbox and startup logs so we can detect new messages cleanly
+    try { rmSync(join(h.inboxDir, 'claude-inbox.log')); } catch {}
+    try { rmSync(join(h.inboxDir, 'codex-inbox.log')); } catch {}
+    h.clearStartupLogs();
+
+    // Phase 3: resume
+    h.tmuxSession = null; // reset so cleanup doesn't fail on stale session
+    const duetScript = join(import.meta.dirname, 'duet.sh');
+    try {
+      execSync(
+        `bash "${duetScript}" resume "${originalRunId}"`,
+        { encoding: 'utf8', env: h.buildEnv(), timeout: 10000 }
+      );
+    } catch {}
+
+    // Re-discover the run dir and tmux session after resume
+    await e2eWaitFor(() => {
+      const rj2 = h.readRunJson();
+      if (rj2 && rj2.status === 'active' && rj2.tmux_session) {
+        h.tmuxSession = rj2.tmux_session;
+        return true;
+      }
+      return false;
+    }, 5000);
+
+    // Wait for binding on the resumed run
+    await h.waitForBinding(25000);
+  });
+
+  after(() => h.cleanup());
+
+  it('preserves run identity across resume', () => {
+    const rj = h.readRunJson();
+    assert.equal(rj.run_id, originalRunId, 'run ID should persist');
+    assert.equal(rj.mode, 'resumed', 'mode should be resumed');
+    assert.equal(rj.status, 'active', 'status should be active');
+  });
+
+  it('reuses stored Claude session ID', () => {
+    const rj = h.readRunJson();
+    assert.equal(rj.claude.session_id, originalClaudeSid,
+      'claude session ID should be reused on resume');
+  });
+
+  it('fake claude launched in resume mode with stored session ID', async () => {
+    // Wait for startup log to be written (agent may still be starting)
+    await e2eWaitFor(() => h.readStartupLog('claude').length > 0, 10000);
+    const entries = h.readStartupLog('claude');
+    const last = entries[entries.length - 1];
+    assert.equal(last.launchMode, 'resume', 'claude should be launched with --resume');
+    assert.equal(last.sessionId, originalClaudeSid, 'claude should resume with stored session ID');
+  });
+
+  it('fake codex launched in resume mode with stored session ID', async () => {
+    await e2eWaitFor(() => h.readStartupLog('codex').length > 0, 10000);
+    const entries = h.readStartupLog('codex');
+    const last = entries[entries.length - 1];
+    assert.equal(last.launchMode, 'resume', 'codex should be launched with resume subcommand');
+    assert.equal(last.resumeId, originalCodexSid, 'codex should resume with stored session ID');
+  });
+
+  it('relay works on the resumed run', async () => {
+    const token = `RESUMED_${Date.now()}`;
+    await h.sendToRouter(`@claude ${token}`);
+    await e2eWaitFor(() => h.readInbox('claude').includes(token), 10000);
+    assert.ok(h.readInbox('claude').includes(token),
+      'claude should receive message on resumed run');
+  });
+
+  it('prior transcript is not replayed into inbox', () => {
+    // The pre-resume message should NOT be in the new inbox
+    // (we cleared inbox files between stop and resume)
+    const inbox = h.readInbox('claude');
+    assert.ok(!inbox.includes('PRE_RESUME_'),
+      'pre-resume messages should not appear in post-resume inbox');
+  });
+});
+
+// ─── E2E: Large multiline relay ───────────────────────────────────────────────
+
+describe('e2e: large multiline relay', { timeout: 60000 }, () => {
+  const h = createE2eHarness('large');
+
+  before(async () => {
+    h.setup();
+    await h.launchDuet();
+    await h.waitForBinding();
+  });
+
+  after(() => h.cleanup());
+
+  it('relays large multiline response from claude to codex intact', async () => {
+    // Send LARGE_RESPONSE trigger to claude
+    const token = `LARGE_RESPONSE_${Date.now()}`;
+    await h.sendToRouter(`@claude ${token}`);
+
+    // Wait for claude to process and write the large response
+    await e2eWaitFor(() => h.readInbox('claude').includes(token), 10000);
+    await e2eSleep(1500);
+
+    // Relay claude's response to codex
+    await h.sendToRouter(`@relay claude>codex check the large response`);
+
+    // Wait for codex to receive the FULL response (wait for END sentinel,
+    // not BEGIN — the last line has no trailing newline in the paste, so it
+    // only arrives after pasteToPane sends Enter 500ms later)
+    await e2eWaitFor(() => {
+      const inbox = h.readInbox('codex');
+      return inbox.includes('END_LARGE_RESPONSE');
+    }, 15000);
+
+    // Verify the claude session log has the full response with sentinels
+    const bindings = h.readBindings();
+    const claudeLog = readFileSync(bindings.claude.path, 'utf8');
+    assert.ok(claudeLog.includes('BEGIN_LARGE_RESPONSE'),
+      'claude session log should contain start sentinel');
+    assert.ok(claudeLog.includes('END_LARGE_RESPONSE'),
+      'claude session log should contain end sentinel');
+
+    // Verify codex received the complete large payload with sentinels and content
+    const codexInbox = h.readInbox('codex');
+    assert.ok(codexInbox.includes('BEGIN_LARGE_RESPONSE'),
+      'codex inbox should contain start sentinel from relayed response');
+    assert.ok(codexInbox.includes('END_LARGE_RESPONSE'),
+      'codex inbox should contain end sentinel from relayed response');
+    assert.ok(codexInbox.includes('Line 50:'),
+      'codex inbox should contain deep interior line (Line 50) proving complete delivery');
   });
 });
