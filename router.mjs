@@ -23,12 +23,12 @@ export {
   lastAutoRelayTime, watcherFailed,
   isWatching, downgradeToPane, findRebindCandidate, rebindTool,
   stopFileWatchers, getRouterState,
-} from './src/router/state.mjs';
-export { handleNewOutput } from './src/router/controller.mjs';
+} from './src/router/state.js';
+export { handleNewOutput } from './src/router/controller.js';
 
 // ─── Main entry ──────────────────────────────────────────────────────────────
 
-import { main } from './src/router/controller.mjs';
+import { main } from './src/router/controller.js';
 
 const isMain = process.argv[1] &&
   (process.argv[1].endsWith('router.mjs') || process.argv[1].endsWith('router'));

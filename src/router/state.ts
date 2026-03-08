@@ -1,24 +1,24 @@
 /**
  * Router runtime state: mutable state containers, file watchers,
  * binding polling, and rebind logic.
- *
- * @typedef {import('../types/runtime.js').ToolName} ToolName
- * @typedef {import('../types/runtime.js').ConverseState} ConverseState
- * @typedef {import('../types/runtime.js').RouterStateSnapshot} RouterStateSnapshot
- * @typedef {import('../types/runtime.js').NewOutputHandler} NewOutputHandler
- * @typedef {import('../types/runtime.js').SessionStateMap} SessionStateMap
  */
 
 import { readFileSync, statSync, readdirSync, watch, existsSync } from 'fs';
+import type { FSWatcher } from 'fs';
 import { join } from 'path';
+import type { Interface as ReadlineInterface } from 'readline';
+
+import type {
+  ToolName, ConverseState, RouterStateSnapshot,
+  NewOutputHandler, SessionStateMap,
+} from '../types/runtime.js';
 
 import {
   sessionState as _sessionState, resolveSessionPath, readIncremental,
   isResponseComplete, getLastResponse, extractCodexSessionId,
 } from '../relay/session-reader.js';
 
-/** @type {SessionStateMap} */
-const sessionState = _sessionState;
+const sessionState = _sessionState as SessionStateMap;
 import { updateRunJson } from '../runtime/run-store.js';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
@@ -27,8 +27,7 @@ export const SESSION = process.env.DUET_SESSION || 'duet';
 export const CLAUDE_PANE = process.env.CLAUDE_PANE;
 export const CODEX_PANE = process.env.CODEX_PANE;
 
-/** @type {Record<string, string | undefined>} */
-export const PANES = { claude: CLAUDE_PANE, codex: CODEX_PANE };
+export const PANES: Record<string, string | undefined> = { claude: CLAUDE_PANE, codex: CODEX_PANE };
 
 export const C = {
   reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m',
@@ -46,55 +45,38 @@ export const RELAY_COOLDOWN_MS = 8000;
 
 // ─── Mutable state ──────────────────────────────────────────────────────────
 
-/** @type {import('readline').Interface | null} */
-let rl = null;
-/** @type {true | null} */
-let watchInterval = null;
-/** @type {Record<string, number>} */
-export const lastAutoRelayTime = {};
-/** @type {ConverseState | null} */
-let converseState = null;
+let rl: ReadlineInterface | null = null;
+let watchInterval: true | null = null;
+export const lastAutoRelayTime: Record<string, number> = {};
+let converseState: ConverseState | null = null;
 
-/** @type {Record<string, import('fs').FSWatcher>} */
-const fileWatchers = {};
-/** @type {Record<string, NodeJS.Timeout>} */
-const fileDebounceTimers = {};
+const fileWatchers: Record<string, FSWatcher> = {};
+const fileDebounceTimers: Record<string, NodeJS.Timeout> = {};
 
-/** @type {NodeJS.Timeout | null} */
-let bindingPollTimer = null;
-/** @type {Set<string>} */
-let pendingTools = new Set();
+let bindingPollTimer: NodeJS.Timeout | null = null;
+let pendingTools = new Set<string>();
 
 // Track tools whose watcher failed after binding — bound but not watching
-/** @type {Set<string>} */
-export const watcherFailed = new Set();
+export const watcherFailed = new Set<string>();
 
 // Callback for session relay — set by controller to avoid circular deps
-/** @type {NewOutputHandler | null} */
-let newOutputHandler = null;
+let newOutputHandler: NewOutputHandler | null = null;
 
 // ─── Accessors ───────────────────────────────────────────────────────────────
 
-/** @param {import('readline').Interface} readline */
-export function setRl(readline) { rl = readline; }
-/** @returns {boolean} */
-export function isWatching() { return watchInterval !== null; }
-export function prompt() { if (rl) rl.prompt(); }
+export function setRl(readline: ReadlineInterface): void { rl = readline; }
+export function isWatching(): boolean { return watchInterval !== null; }
+export function prompt(): void { if (rl) rl.prompt(); }
 
-/** @returns {ConverseState | null} */
-export function getConverseState() { return converseState; }
-/** @param {ConverseState | null} state */
-export function setConverseState(state) { converseState = state; }
+export function getConverseState(): ConverseState | null { return converseState; }
+export function setConverseState(state: ConverseState | null): void { converseState = state; }
 
-/** @param {NewOutputHandler} handler */
-export function setNewOutputHandler(handler) { newOutputHandler = handler; }
+export function setNewOutputHandler(handler: NewOutputHandler): void { newOutputHandler = handler; }
 
 /**
  * Return binding state summary for user-facing messages.
- * @param {ToolName} tool
- * @returns {string}
  */
-export function bindingStatus(tool) {
+export function bindingStatus(tool: ToolName): string {
   const st = sessionState[tool];
   if (st.relayMode === 'session') return 'bound';
   if (st.relayMode === 'pending') return 'pending';
@@ -103,19 +85,16 @@ export function bindingStatus(tool) {
 
 /**
  * Get the latest structured session response for a tool, or null if unavailable.
- * @param {ToolName} tool
- * @returns {string | null}
  */
-export function getSessionResponse(tool) {
-  const logResponse = /** @type {string | null} */ (getLastResponse(tool));
+export function getSessionResponse(tool: ToolName): string | null {
+  const logResponse = getLastResponse(tool) as string | null;
   return (logResponse && logResponse.length > 0) ? logResponse : null;
 }
 
 /**
  * Read current run.json for debug snapshots.
- * @returns {Record<string, unknown> | null}
  */
-export function readRunJson() {
+export function readRunJson(): Record<string, unknown> | null {
   const runDir = process.env.DUET_RUN_DIR;
   if (!runDir) return null;
   const path = join(runDir, 'run.json');
@@ -127,9 +106,8 @@ export function readRunJson() {
 
 /**
  * Assemble router-internal state for the debug snapshot.
- * @returns {RouterStateSnapshot}
  */
-export function getRouterState() {
+export function getRouterState(): RouterStateSnapshot {
   return {
     watching: isWatching(),
     converseState: converseState ? { ...converseState } : null,
@@ -144,19 +122,15 @@ export function getRouterState() {
 
 // ─── File watcher functions (session-bound event-driven relay) ───────────────
 
-/**
- * @param {string} tool
- * @returns {boolean}
- */
-export function startFileWatcher(tool) {
-  const filePath = sessionState[/** @type {ToolName} */ (tool)].path;
+export function startFileWatcher(tool: string): boolean {
+  const filePath = sessionState[tool as ToolName].path;
   if (!filePath || fileWatchers[tool]) return false;
   try {
     try {
       const { mtimeMs } = statSync(filePath);
-      sessionState[/** @type {ToolName} */ (tool)].lastSessionActivityAt = Math.max(mtimeMs, Date.now());
+      sessionState[tool as ToolName].lastSessionActivityAt = Math.max(mtimeMs, Date.now());
     } catch {
-      sessionState[/** @type {ToolName} */ (tool)].lastSessionActivityAt = Date.now();
+      sessionState[tool as ToolName].lastSessionActivityAt = Date.now();
     }
     fileWatchers[tool] = watch(filePath, (eventType) => {
       if (eventType === 'change') onFileChange(tool);
@@ -173,10 +147,7 @@ export function startFileWatcher(tool) {
   }
 }
 
-/**
- * @param {string} tool
- */
-function stopFileWatcher(tool) {
+function stopFileWatcher(tool: string): void {
   if (fileWatchers[tool]) {
     fileWatchers[tool].close();
     delete fileWatchers[tool];
@@ -187,35 +158,29 @@ function stopFileWatcher(tool) {
   }
 }
 
-export function stopFileWatchers() {
+export function stopFileWatchers(): void {
   for (const tool of Object.keys(fileWatchers)) stopFileWatcher(tool);
 }
 
-/**
- * @param {string} tool
- */
-function onFileChange(tool) {
+function onFileChange(tool: string): void {
   if (!watchInterval) return;
-  const { hasNew, complete } = readIncremental(/** @type {ToolName} */ (tool));
+  const { hasNew, complete } = readIncremental(tool as ToolName);
   if (!hasNew) return;
-  sessionState[/** @type {ToolName} */ (tool)].lastSessionActivityAt = Date.now();
+  sessionState[tool as ToolName].lastSessionActivityAt = Date.now();
   if (fileDebounceTimers[tool]) clearTimeout(fileDebounceTimers[tool]);
   const delay = complete ? SESSION_COMPLETE_MS : SESSION_DEBOUNCE_MS;
   fileDebounceTimers[tool] = setTimeout(() => triggerSessionRelay(tool), delay);
 }
 
-/**
- * @param {string} tool
- */
-async function triggerSessionRelay(tool) {
-  const st = sessionState[/** @type {ToolName} */ (tool)];
+async function triggerSessionRelay(tool: string): Promise<void> {
+  const st = sessionState[tool as ToolName];
   if (!st.lastResponse) return;
-  if (newOutputHandler) await newOutputHandler(/** @type {ToolName} */ (tool), st.lastResponse);
+  if (newOutputHandler) await newOutputHandler(tool as ToolName, st.lastResponse);
 }
 
 // ─── Polling start / stop ────────────────────────────────────────────────────
 
-function scheduleBindingPoll() {
+function scheduleBindingPoll(): void {
   if (!watchInterval || pendingTools.size === 0) return;
   bindingPollTimer = setTimeout(() => {
     pollBindings();
@@ -223,10 +188,10 @@ function scheduleBindingPoll() {
   }, BINDING_POLL_MS);
 }
 
-function pollBindings() {
+function pollBindings(): void {
   for (const name of [...pendingTools]) {
-    resolveSessionPath(/** @type {ToolName} */ (name));
-    const st = sessionState[/** @type {ToolName} */ (name)];
+    resolveSessionPath(name as ToolName);
+    const st = sessionState[name as ToolName];
     if (st.relayMode === 'session' && st.path) {
       pendingTools.delete(name);
       if (startFileWatcher(name)) {
@@ -245,11 +210,11 @@ function pollBindings() {
   }
 }
 
-export function startPolling() {
+export function startPolling(): void {
   if (watchInterval) return;
   pendingTools = new Set();
   watcherFailed.clear();
-  for (const name of /** @type {ToolName[]} */ (['claude', 'codex'])) {
+  for (const name of (['claude', 'codex'] as ToolName[])) {
     resolveSessionPath(name);
     const st = sessionState[name];
     if (st.relayMode === 'session' && st.path) {
@@ -268,7 +233,7 @@ export function startPolling() {
   scheduleBindingPoll();
 }
 
-export function stopPolling() {
+export function stopPolling(): void {
   watchInterval = null;
   if (bindingPollTimer) { clearTimeout(bindingPollTimer); bindingPollTimer = null; }
   converseState = null;
@@ -281,27 +246,22 @@ export function stopPolling() {
 
 /**
  * No-op: retained as export for test backward compat but no longer changes transport.
- * @param {string} tool
- * @param {string} reason
  */
-export function downgradeToPane(tool, reason) {
+export function downgradeToPane(tool: string, reason: string): void {
   console.log(`\n${C.yellow}${tool}: ${reason} — use /rebind ${tool} to re-discover session${C.reset}`);
   prompt();
 }
 
 /**
  * Find the best rebind candidate by scanning for recent .jsonl files.
- * @param {ToolName} tool
- * @returns {string | null}
  */
-export function findRebindCandidate(tool) {
+export function findRebindCandidate(tool: ToolName): string | null {
   const st = sessionState[tool];
   if (!st.path) return null;
   const dir = st.path.replace(/\/[^/]+$/, '');
   try {
     const entries = readdirSync(dir);
-    /** @type {string | null} */
-    let best = null;
+    let best: string | null = null;
     let bestMtime = 0;
     for (const entry of entries) {
       if (!entry.endsWith('.jsonl')) continue;
@@ -322,13 +282,10 @@ export function findRebindCandidate(tool) {
 
 /**
  * Rebind a tool to a new session file.
- * @param {ToolName} tool
- * @param {string} newPath
- * @returns {Promise<{oldPath: string | null, newPath: string, newSid: string | null}>}
  */
-export async function rebindTool(tool, newPath) {
+export async function rebindTool(tool: ToolName, newPath: string): Promise<{ oldPath: string | null; newPath: string; newSid: string | null }> {
   const st = sessionState[tool];
-  const oldPath = /** @type {string | null} */ (st.path);
+  const oldPath = st.path;
   stopFileWatcher(tool);
 
   st.path = newPath;
@@ -344,8 +301,7 @@ export async function rebindTool(tool, newPath) {
   st.lastSessionActivityAt = Date.now();
 
   // Claude: session ID is the filename UUID. Codex: extract payload.id from first JSONL line.
-  /** @type {string | null} */
-  let newSid;
+  let newSid: string | null;
   if (tool === 'codex') {
     newSid = extractCodexSessionId(newPath);
   } else {
@@ -358,8 +314,7 @@ export async function rebindTool(tool, newPath) {
     watcherFailed.delete(tool);
   }
 
-  /** @type {Record<string, string>} */
-  const updates = { [`${tool}.binding_path`]: newPath, updated_at: new Date().toISOString() };
+  const updates: Record<string, string> = { [`${tool}.binding_path`]: newPath, updated_at: new Date().toISOString() };
   if (newSid) updates[`${tool}.session_id`] = newSid;
   updateRunJson(updates);
 

@@ -130,6 +130,7 @@ export function createE2eHarness(tag, extraEnv = {}) {
         BIND_TIMEOUT: '10',
         COLUMNS: '120',
         LINES: '40',
+        DUET_USE_SOURCE: '1',  // dev tests use source mode by default
         ...extraEnv,
       });
     },

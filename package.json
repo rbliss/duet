@@ -2,10 +2,14 @@
   "name": "duet",
   "version": "0.1.0",
   "type": "module",
+  "bin": {
+    "duet": "dist/cli/duet.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
-    "test": "node --import tsx/esm --test"
+    "test": "node --import tsx/esm --test",
+    "verify": "npm run typecheck && npm run build && npm test"
   },
   "dependencies": {
     "zod": "^3.24.0"

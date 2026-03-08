@@ -23,13 +23,40 @@ Run Claude Code and Codex side by side in a single unified console. Direct messa
 - [Codex](https://github.com/openai/codex) (`codex` CLI)
 - Node.js 18+
 
+## Install and build
+
+```bash
+npm install            # install dependencies
+npm run build          # compile TypeScript to dist/
+```
+
 ## Quick start
 
 ```bash
-~/duet/duet.sh
+./duet.sh              # launch (uses built dist/ by default)
+./duet.sh resume       # resume last stopped run
+./duet.sh list         # show all runs
+./duet.sh destroy ID   # remove a run
 ```
 
 This opens a tmux session with three panes: Claude Code (top-left), Codex (top-right), and the Duet router (bottom). Both CLIs launch automatically.
+
+The package also exposes a `duet` bin entry (`dist/cli/duet.js`) for use via `npx` or `npm link`:
+
+```bash
+npx duet               # if installed as a dependency
+node dist/cli/duet.js  # direct invocation without shell shim
+```
+
+### Development mode
+
+For working on Duet itself, use source mode (requires `tsx`):
+
+```bash
+DUET_USE_SOURCE=1 ./duet.sh
+```
+
+This runs TypeScript source directly via the tsx ESM loader, skipping the build step. If `dist/` doesn't exist and `DUET_USE_SOURCE` is not set, the shell shim fails with a clear error.
 
 ## Commands
 
@@ -137,8 +164,10 @@ If you edit a role file, the changes take effect the next time the run is launch
 ## How it works
 
 ```
-duet.sh          Launcher — sets up tmux session, pane layout, styling
-router.mjs       Router — parses commands, dispatches via tmux, watches for @mentions
+duet.sh                  Shell shim — execs dist/cli/duet.js (or src/ in dev mode)
+dist/cli/duet.js         CLI entry — preflight, subcommand dispatch
+dist/launcher/commands.js Launcher — creates tmux layout, launches tools + router
+dist/router/controller.js Router — parses commands, dispatches via tmux, watches for @mentions
 ```
 
 The router communicates with tool panes through tmux primitives:
@@ -156,10 +185,12 @@ Both CLIs run as full interactive processes in their own pseudo-terminals. Duet 
 ## Tests
 
 ```bash
-cd ~/duet && node --test
+npm run build          # required for dist smoke tests
+npm test               # runs all tests via node --import tsx/esm --test
+npm run verify         # typecheck + build + test (full release check)
 ```
 
-331 tests across 67 suites: shell escaping, input parsing (including converse/watch/stop), content diffing (`getNewContent`), @mention detection (`detectMentions`), tmux integration (sendKeys, capturePane, pasteToPane, focusPane, cross-pane relay), launcher layout, response extraction (Claude and Codex formats), completion detection (`isResponseComplete`), incremental session reader, end-to-end session binding (bindings.json manifest), binding lifecycle (manifest caching and re-reads), launcher binding contract (bind-sessions.sh with fallback coverage), session-only automation enforcement, explicit binding enforcement, watch/status messaging, CODEX_HOME isolation, typed manifest schemas, workspace management (cwdHash, resolveRunId, listRuns, destroyRun, buildToolPrompt), and edge cases. Integration tests run against real tmux sessions.
+336+ tests across 70+ suites: shell escaping, input parsing (including converse/watch/stop), content diffing (`getNewContent`), @mention detection (`detectMentions`), tmux integration (sendKeys, capturePane, pasteToPane, focusPane, cross-pane relay), launcher layout, response extraction (Claude and Codex formats), completion detection (`isResponseComplete`), incremental session reader, end-to-end session binding (bindings.json manifest), binding lifecycle (manifest caching and re-reads), launcher binding contract (bind-sessions.sh with fallback coverage), session-only automation enforcement, explicit binding enforcement, watch/status messaging, CODEX_HOME isolation, typed manifest schemas, workspace management (cwdHash, resolveRunId, listRuns, destroyRun, buildToolPrompt), and edge cases. Integration tests run against real tmux sessions.
 
 ## Known limitations
 

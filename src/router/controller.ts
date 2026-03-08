@@ -1,13 +1,11 @@
 /**
  * Router controller: command handlers, output relay, banner, and main entry.
- *
- * @typedef {import('../types/runtime.js').ToolName} ToolName
- * @typedef {import('../types/runtime.js').ConverseState} ConverseState
- * @typedef {import('../types/runtime.js').SessionStateMap} SessionStateMap
  */
 
 import { createInterface } from 'readline';
 import { rmSync } from 'fs';
+
+import type { ToolName, ConverseState, SessionStateMap } from '../types/runtime.js';
 
 import { parseInput, detectMentions } from './commands.js';
 import {
@@ -18,29 +16,22 @@ import {
   getSessionResponse, readRunJson, getRouterState,
   startPolling, stopPolling, startFileWatcher, stopFileWatchers,
   findRebindCandidate, rebindTool, downgradeToPane,
-} from './state.mjs';
+} from './state.js';
 import {
   sendKeys, pasteToPane, capturePane, focusPane,
   killSession, detachClient,
 } from '../transport/tmux-client.js';
 import { sessionState as _sessionState, resolveSessionPath } from '../relay/session-reader.js';
 
-/** @type {SessionStateMap} */
-const sessionState = _sessionState;
+const sessionState = _sessionState as SessionStateMap;
 import { loadBindings } from '../runtime/bindings-store.js';
 import { updateRunJson } from '../runtime/run-store.js';
 import { collectDebugSnapshot, renderDebugReport } from '../debug/debug-report.js';
 
 // ─── Output relay ────────────────────────────────────────────────────────────
 
-/**
- * @param {ToolName} source
- * @param {string} newContent
- * @returns {Promise<void>}
- */
-export async function handleNewOutput(source, newContent) {
-  /** @type {ToolName} */
-  const other = source === 'claude' ? 'codex' : 'claude';
+export async function handleNewOutput(source: ToolName, newContent: string): Promise<void> {
+  const other: ToolName = source === 'claude' ? 'codex' : 'claude';
   const now = Date.now();
   const converseState = getConverseState();
 
@@ -95,7 +86,7 @@ export async function handleNewOutput(source, newContent) {
 
 // ─── Banner ──────────────────────────────────────────────────────────────────
 
-function printBanner() {
+function printBanner(): void {
   console.log(`
 ${C.cyan}${C.bold}  DUET ${C.reset}${C.dim} - Claude Code + Codex, one conversation${C.reset}
 
@@ -124,11 +115,7 @@ ${C.cyan}${C.bold}  DUET ${C.reset}${C.dim} - Claude Code + Codex, one conversat
 
 // ─── Input handling ──────────────────────────────────────────────────────────
 
-/**
- * @param {string} input
- * @returns {Promise<void>}
- */
-async function handleInput(input) {
+async function handleInput(input: string): Promise<void> {
   const parsed = parseInput(input);
 
   switch (parsed.type) {
@@ -170,7 +157,7 @@ async function handleInput(input) {
     case 'watch': {
       startPolling();
       console.log(`${C.cyan}Watching for @mentions — tools can now talk to each other${C.reset}`);
-      for (const tool of /** @type {ToolName[]} */ (['claude', 'codex'])) {
+      for (const tool of (['claude', 'codex'] as ToolName[])) {
         const bs = bindingStatus(tool);
         const color = tool === 'claude' ? C.magenta : C.green;
         if (bs === 'bound' && watcherFailed.has(tool)) {
@@ -202,7 +189,7 @@ async function handleInput(input) {
       } else {
         console.log(`${C.dim}Idle — not watching${C.reset}`);
       }
-      for (const tool of /** @type {ToolName[]} */ (['claude', 'codex'])) {
+      for (const tool of (['claude', 'codex'] as ToolName[])) {
         const st = sessionState[tool];
         const bs = bindingStatus(tool);
         const color = tool === 'claude' ? C.magenta : C.green;
@@ -267,7 +254,7 @@ async function handleInput(input) {
         console.log(`${C.red}Usage: /rebind claude|codex${C.reset}`);
         return;
       }
-      const tool = parsed.target;
+      const tool = parsed.target as ToolName;
       const candidate = findRebindCandidate(tool);
       if (!candidate) {
         console.log(`${C.red}No rebind candidate found for ${tool} — current binding unchanged${C.reset}`);
@@ -282,7 +269,7 @@ async function handleInput(input) {
     }
     case 'converse': {
       // Resolve latest binding state
-      for (const t of /** @type {ToolName[]} */ (['claude', 'codex'])) resolveSessionPath(t);
+      for (const t of (['claude', 'codex'] as ToolName[])) resolveSessionPath(t);
       const cbs = bindingStatus('claude');
       const xbs = bindingStatus('codex');
       if (cbs !== 'bound' || xbs !== 'bound') {
@@ -316,7 +303,7 @@ async function handleInput(input) {
       return;
     case 'snap':
       if (PANES[parsed.target]) {
-        const output = await capturePane(/** @type {string} */ (PANES[parsed.target]), parsed.lines);
+        const output = await capturePane(PANES[parsed.target] as string, parsed.lines);
         console.log(`${C.yellow}-- ${parsed.target} (last ${parsed.lines} lines) --${C.reset}`);
         console.log(output);
         console.log(`${C.yellow}-- end --${C.reset}`);
@@ -325,12 +312,12 @@ async function handleInput(input) {
       }
       return;
     case 'relay': {
-      const fromBs = bindingStatus(/** @type {ToolName} */ (parsed.from));
+      const fromBs = bindingStatus(parsed.from as ToolName);
       if (fromBs !== 'bound') {
         console.log(`${C.red}Cannot relay — ${parsed.from} is not session-bound (${fromBs})${C.reset}`);
         return;
       }
-      const response = getSessionResponse(/** @type {ToolName} */ (parsed.from));
+      const response = getSessionResponse(parsed.from as ToolName);
       if (!response) {
         console.log(`${C.red}No structured response available from ${parsed.from} — nothing to relay${C.reset}`);
         return;
@@ -386,7 +373,7 @@ async function handleInput(input) {
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
-export function main() {
+export function main(): void {
   const DUET_MODE = process.env.DUET_MODE || 'new';
 
   // Register the output handler callback with state module
@@ -410,7 +397,7 @@ export function main() {
 
   startPolling();
 
-  for (const tool of /** @type {ToolName[]} */ (['claude', 'codex'])) {
+  for (const tool of (['claude', 'codex'] as ToolName[])) {
     const bs = bindingStatus(tool);
     const st = sessionState[tool];
     const level = st.bindingLevel ? ` [${st.bindingLevel}]` : '';
@@ -444,8 +431,10 @@ export function main() {
 // This enables the dist path: node dist/router/controller.js
 const isMain = process.argv[1] && (
   process.argv[1].endsWith('/controller.mjs') ||
+  process.argv[1].endsWith('/controller.ts') ||
   process.argv[1].endsWith('/controller.js') ||
   process.argv[1].endsWith('\\controller.mjs') ||
+  process.argv[1].endsWith('\\controller.ts') ||
   process.argv[1].endsWith('\\controller.js')
 );
 

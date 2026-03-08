@@ -14,8 +14,12 @@
 #   Exit code 0 always
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ "${DUET_USE_DIST:-}" = "1" ]; then
-  exec node "$DIR/dist/bindings/reconciler.js" "$@"
-else
+if [ "${DUET_USE_SOURCE:-}" = "1" ]; then
   exec node --import tsx/esm "$DIR/src/bindings/reconciler.ts" "$@"
+else
+  if [ ! -f "$DIR/dist/bindings/reconciler.js" ]; then
+    echo "Error: dist/bindings/reconciler.js not found — run 'npm run build' first." >&2
+    exit 1
+  fi
+  exec node "$DIR/dist/bindings/reconciler.js" "$@"
 fi

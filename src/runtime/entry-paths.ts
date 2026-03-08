@@ -1,9 +1,12 @@
 /**
  * Resolve internal entrypoint paths for source vs dist mode.
  *
- * When running from source (src/), paths point at the source tree and
- * nodeArgs includes the tsx loader for .ts resolution.
- * When running from dist/, paths point at built output and nodeArgs is empty.
+ * Production default: runs from dist/ (built output).
+ * Dev override: DUET_USE_SOURCE=1 runs from src/ with tsx loader.
+ *
+ * Mode is auto-detected from __dirname — if this module is loaded from
+ * dist/, paths point at built output and nodeArgs is empty. If loaded
+ * from src/, paths point at the source tree and nodeArgs includes tsx.
  */
 
 import { dirname, join, resolve, sep } from 'path';
@@ -19,9 +22,9 @@ const root = resolve(__dirname, '../..');
 /** Absolute paths to internal entrypoints. */
 export const entryPaths = Object.freeze({
   /** CLI entry point. */
-  cli:         isDist ? join(root, 'dist/cli/duet.mjs')            : join(root, 'src/cli/duet.mjs'),
-  /** Router entry point (.mjs source → .mjs dist). */
-  router:      isDist ? join(root, 'dist/router/controller.mjs')   : join(root, 'router.mjs'),
+  cli:         isDist ? join(root, 'dist/cli/duet.js')             : join(root, 'src/cli/duet.ts'),
+  /** Router entry point. */
+  router:      isDist ? join(root, 'dist/router/controller.js')    : join(root, 'router.mjs'),
   /** Binding reconciler entry point. */
   reconciler:  isDist ? join(root, 'dist/bindings/reconciler.js')  : join(root, 'src/bindings/reconciler.ts'),
   /** Project root directory. */

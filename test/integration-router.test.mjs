@@ -10,8 +10,8 @@ import { parseInput, sessionState, handleNewOutput, lastAutoRelayTime, downgrade
 function readRouterSource() {
   return [
     readFileSync('/home/claude/duet/src/router/commands.ts', 'utf8'),
-    readFileSync('/home/claude/duet/src/router/state.mjs', 'utf8'),
-    readFileSync('/home/claude/duet/src/router/controller.mjs', 'utf8'),
+    readFileSync('/home/claude/duet/src/router/state.ts', 'utf8'),
+    readFileSync('/home/claude/duet/src/router/controller.ts', 'utf8'),
   ].join('\n');
 }
 

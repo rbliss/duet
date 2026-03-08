@@ -25,7 +25,7 @@ for (const cmd of ['tmux', 'claude', 'codex', 'node']) {
 }
 
 // Lazy import to avoid loading all modules before preflight
-const { cmdNew, cmdResume, cmdFork, cmdList, cmdDestroy } = await import('../launcher/commands.mjs');
+const { cmdNew, cmdResume, cmdFork, cmdList, cmdDestroy } = await import('../launcher/commands.js');
 
 const [subcommand, ...rest] = process.argv.slice(2);
 

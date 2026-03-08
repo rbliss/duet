@@ -300,6 +300,7 @@ describe('launcher binding contract', () => {
       GLOBAL_CODEX_SESSIONS: globalCodexSessions,
       WORKDIR: '/test/workdir',
       BIND_TIMEOUT: '2',
+      DUET_USE_SOURCE: '1',
       ...env,
     });
     try {
@@ -621,6 +622,7 @@ describe('binder resume fast-path', () => {
       GLOBAL_CODEX_SESSIONS: globalCodexSessions,
       WORKDIR: '/test/workdir',
       BIND_TIMEOUT: '2',
+      DUET_USE_SOURCE: '1',
       ...env,
     });
     try {
@@ -746,6 +748,7 @@ describe('resume fast-path session ID validation', () => {
       GLOBAL_CODEX_SESSIONS: globalCodexSessions,
       WORKDIR: '/test/workdir',
       BIND_TIMEOUT: '2',
+      DUET_USE_SOURCE: '1',
       ...env,
     });
     try {

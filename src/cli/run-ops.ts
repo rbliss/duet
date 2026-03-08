@@ -4,14 +4,14 @@
  * Each subcommand outputs JSON to stdout for shell consumption.
  *
  * Usage:
- *   node run-ops.mjs find-active <cwd>
- *   node run-ops.mjs resolve-run <ref>
- *   node run-ops.mjs write-run-json <path> <key1> <val1> [<key2> <val2> ...]
- *   node run-ops.mjs read-fields <path> <key1> [<key2> ...]
- *   node run-ops.mjs update-workspace <cwd> <run-id> <active>
- *   node run-ops.mjs build-prompt <tool> <workdir> <output> <duet-md-path>
- *   node run-ops.mjs list-runs
- *   node run-ops.mjs destroy-run <run-id>
+ *   node run-ops.ts find-active <cwd>
+ *   node run-ops.ts resolve-run <ref>
+ *   node run-ops.ts write-run-json <path> <key1> <val1> [<key2> <val2> ...]
+ *   node run-ops.ts read-fields <path> <key1> [<key2> ...]
+ *   node run-ops.ts update-workspace <cwd> <run-id> <active>
+ *   node run-ops.ts build-prompt <tool> <workdir> <output> <duet-md-path>
+ *   node run-ops.ts list-runs
+ *   node run-ops.ts destroy-run <run-id>
  */
 
 import {
@@ -50,8 +50,7 @@ switch (cmd) {
 
   case 'write-run-json': {
     const path = args[0];
-    /** @type {Record<string, string>} */
-    const kvPairs = {};
+    const kvPairs: Record<string, string> = {};
     for (let i = 1; i < args.length; i += 2) {
       kvPairs[args[i]] = args[i + 1] || '';
     }
@@ -61,8 +60,7 @@ switch (cmd) {
 
   case 'read-fields': {
     const path = args[0];
-    /** @type {Record<string, string>} */
-    const result = {};
+    const result: Record<string, string> = {};
     for (let i = 1; i < args.length; i++) {
       result[args[i]] = readRunField(path, args[i]);
     }
@@ -120,6 +118,6 @@ switch (cmd) {
   }
 
   default:
-    process.stderr.write(`Unknown command: ${cmd}\nUsage: node run-ops.mjs <command> [args...]\n`);
+    process.stderr.write(`Unknown command: ${cmd}\nUsage: node run-ops.ts <command> [args...]\n`);
     process.exit(1);
 }

@@ -7,7 +7,7 @@ import { join } from 'path';
 // ─── Resume: durable state directory structure ───────────────────────────────
 
 describe('durable state directory structure', () => {
-  const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
+  const commands = readFileSync('/home/claude/duet/src/launcher/commands.ts', 'utf8');
 
   it('uses persistent run directory under ~/.local/state/duet', () => {
     assert.ok(commands.includes('.local/state/duet'));
@@ -177,7 +177,7 @@ for rj in runs_dir.glob('*/run.json'):
     });
 
     const output = execSync(
-      `DUET_BASE="${testDir}" node --import tsx/esm /home/claude/duet/src/cli/run-ops.mjs list-runs "duet.sh"`,
+      `DUET_BASE="${testDir}" node --import tsx/esm /home/claude/duet/src/cli/run-ops.ts list-runs "duet.sh"`,
       { encoding: 'utf8' }
     ).trim();
 
@@ -202,7 +202,7 @@ for rj in runs_dir.glob('*/run.json'):
     mkdirSync(runsDir, { recursive: true });
 
     const output = execSync(
-      `DUET_BASE="${testDir}" node --import tsx/esm /home/claude/duet/src/cli/run-ops.mjs list-runs "duet.sh"`,
+      `DUET_BASE="${testDir}" node --import tsx/esm /home/claude/duet/src/cli/run-ops.ts list-runs "duet.sh"`,
       { encoding: 'utf8' }
     ).trim();
 
@@ -213,7 +213,7 @@ for rj in runs_dir.glob('*/run.json'):
 // ─── Role prompt injection ────────────────────────────────────────────────────
 
 describe('role prompt injection', () => {
-  const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
+  const commands = readFileSync('/home/claude/duet/src/launcher/commands.ts', 'utf8');
   const ws = readFileSync('/home/claude/duet/src/runtime/workspace.ts', 'utf8');
 
   it('buildToolPrompt handles role files', () => {
@@ -362,7 +362,7 @@ describe('build_tool_prompt integration', () => {
 
 describe('/destroy ordering', () => {
   it('router.mjs removes run dir before killing tmux session', () => {
-    const src = readFileSync('/home/claude/duet/src/router/controller.mjs', 'utf8');
+    const src = readFileSync('/home/claude/duet/src/router/controller.ts', 'utf8');
     const destroyBlock = src.slice(src.indexOf("case 'destroy':"), src.indexOf("case 'destroy':") + 600);
     const rmIndex = destroyBlock.indexOf('rmSync');
     const killIndex = destroyBlock.indexOf('killSession');
@@ -442,8 +442,8 @@ describe('shell quoting for paths with spaces', () => {
   });
 
   it('JS launcher uses shellQuote for interpolated paths', () => {
-    const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
-    assert.ok(commands.includes('shellQuote'), 'commands.mjs should use shellQuote');
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.ts', 'utf8');
+    assert.ok(commands.includes('shellQuote'), 'commands.ts should use shellQuote');
     const tmuxMod = readFileSync('/home/claude/duet/src/launcher/tmux.ts', 'utf8');
     assert.ok(tmuxMod.includes('shellQuote'), 'tmux.mjs should define shellQuote');
   });
@@ -461,7 +461,7 @@ describe('shell quoting for paths with spaces', () => {
     const tmuxMod = readFileSync('/home/claude/duet/src/launcher/tmux.ts', 'utf8');
     const attachBlock = tmuxMod.slice(tmuxMod.indexOf('export function tmuxAttach'));
     assert.ok(attachBlock.includes('result.status'), 'tmuxAttach should return exit status');
-    const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.ts', 'utf8');
     assert.ok(commands.includes('process.exitCode = tmuxAttach'), 'callers should set exitCode from tmuxAttach');
   });
 });
@@ -475,6 +475,7 @@ describe('spaced checkout path', () => {
   before(() => {
     mkdirSync(spacedRepo, { recursive: true });
     execSync(`ln -sf /home/claude/duet/src "${spacedRepo}/src"`);
+    execSync(`ln -sf /home/claude/duet/dist "${spacedRepo}/dist"`);
     execSync(`ln -sf /home/claude/duet/lib "${spacedRepo}/lib"`);
     execSync(`ln -sf /home/claude/duet/DUET.md "${spacedRepo}/DUET.md"`);
     execSync(`ln -sf /home/claude/duet/package.json "${spacedRepo}/package.json"`);
@@ -499,7 +500,7 @@ describe('spaced checkout path', () => {
 
 describe('codex fast-path requires session ID for resume', () => {
   it('only sets RESUME_CODEX_PATH when codexSessionId is present', () => {
-    const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.ts', 'utf8');
     const resumeFunc = commands.slice(
       commands.indexOf('export function cmdResume'),
       commands.indexOf('export function cmdFork')
@@ -517,8 +518,8 @@ describe('ambiguous run-id prefix handling', () => {
   it('resolveRunId errors on ambiguous prefix', () => {
     const ws = readFileSync('/home/claude/duet/src/runtime/workspace.ts', 'utf8');
     assert.ok(ws.includes('ambiguous prefix'), 'JS module should error on ambiguous prefix');
-    const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
-    assert.ok(commands.includes('resolveRunId'), 'commands.mjs should use resolveRunId');
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.ts', 'utf8');
+    assert.ok(commands.includes('resolveRunId'), 'commands.ts should use resolveRunId');
   });
 });
 
@@ -526,8 +527,8 @@ describe('ambiguous run-id prefix handling', () => {
 
 describe('workspace path canonicalization', () => {
   it('cmdNew canonicalizes workdir with pwd -P', () => {
-    const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
-    assert.ok(commands.includes('pwd -P'), 'commands.mjs should canonicalize workdir with pwd -P');
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.ts', 'utf8');
+    assert.ok(commands.includes('pwd -P'), 'commands.ts should canonicalize workdir with pwd -P');
   });
 
   it('canonicalization resolves relative and symlink paths', () => {
