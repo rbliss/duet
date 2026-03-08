@@ -120,17 +120,17 @@ for run in runs:
   });
 
   it('shows resume hint for stopped runs only', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    assert.ok(script.includes("'resumable': status in ('stopped', 'detached')"));
-    assert.ok(script.includes("if run['resumable']"));
-    assert.ok(script.includes("resume:"));
+    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
+    assert.ok(ws.includes("'stopped'") && ws.includes("'detached'"));
+    assert.ok(ws.includes('resumable'));
+    assert.ok(ws.includes("resume:"));
   });
 
   it('extracts codex title from SQLite threads table', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    assert.ok(script.includes('get_codex_title'));
-    assert.ok(script.includes('state_5.sqlite'));
-    assert.ok(script.includes('SELECT title, first_user_message FROM threads'));
+    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
+    assert.ok(ws.includes('getCodexTitle'));
+    assert.ok(ws.includes('state_5.sqlite'));
+    assert.ok(ws.includes('SELECT title, first_user_message FROM threads'));
   });
 
   it('handles missing codex_home and missing session_id gracefully', () => {
@@ -157,15 +157,14 @@ for rj in runs_dir.glob('*/run.json'):
   });
 
   it('truncates long titles with ellipsis', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    assert.ok(script.includes('MAX_TITLE = 72'));
-    assert.ok(script.includes("title[:MAX_TITLE - 1]"));
+    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
+    assert.ok(ws.includes('MAX_TITLE'));
+    assert.ok(ws.includes('72'));
   });
 
   it('shows shortened session IDs', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    assert.ok(script.includes("c_sid[:8]"));
-    assert.ok(script.includes("x_sid[:8]"));
+    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
+    assert.ok(ws.includes('.slice(0, 8)'));
   });
 
   it('end-to-end: renders full output with correct ordering and format', () => {
@@ -183,14 +182,9 @@ for rj in runs_dir.glob('*/run.json'):
       claude: { session_id: '' }, codex: {},
     });
 
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    const start = script.indexOf("<<'PYLIST'") + "<<'PYLIST'".length;
-    const end = script.indexOf('\nPYLIST', start);
-    const pyCode = script.slice(start, end);
-
     const output = execSync(
-      `python3 - "${runsDir}" "duet.sh"`,
-      { encoding: 'utf8', input: pyCode }
+      `DUET_BASE="${testDir}" node /home/claude/duet/src/cli/run-ops.mjs list-runs "duet.sh"`,
+      { encoding: 'utf8' }
     ).trim();
 
     const lines = output.split('\n');
@@ -213,14 +207,9 @@ for rj in runs_dir.glob('*/run.json'):
     rmSync(runsDir, { recursive: true, force: true });
     mkdirSync(runsDir, { recursive: true });
 
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    const start = script.indexOf("<<'PYLIST'") + "<<'PYLIST'".length;
-    const end = script.indexOf('\nPYLIST', start);
-    const pyCode = script.slice(start, end);
-
     const output = execSync(
-      `python3 - "${runsDir}" "duet.sh"`,
-      { encoding: 'utf8', input: pyCode }
+      `DUET_BASE="${testDir}" node /home/claude/duet/src/cli/run-ops.mjs list-runs "duet.sh"`,
+      { encoding: 'utf8' }
     ).trim();
 
     assert.ok(output.includes('(no runs found)'));
@@ -234,8 +223,10 @@ describe('role prompt injection', () => {
 
   it('duet.sh defines build_tool_prompt helper', () => {
     assert.ok(script.includes('build_tool_prompt()'));
-    assert.ok(script.includes('CLAUDE_ROLE.md'));
-    assert.ok(script.includes('CODEX_ROLE.md'));
+    assert.ok(script.includes('build-prompt'));
+    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
+    assert.ok(ws.includes('CLAUDE_ROLE.md'));
+    assert.ok(ws.includes('CODEX_ROLE.md'));
   });
 
   it('build_tool_prompt composes prompt files under runtime/', () => {
@@ -274,7 +265,7 @@ describe('role prompt injection', () => {
 
   it('codex fork path includes model_instructions_file', () => {
     const cmdFork = script.slice(script.indexOf('cmd_fork()'), script.indexOf('cmd_list()'));
-    assert.ok(cmdFork.includes('codex fork $codex_sid --dangerously-bypass-approvals-and-sandbox -c model_instructions_file='));
+    assert.ok(cmdFork.includes('codex fork $codex_session_id --dangerously-bypass-approvals-and-sandbox -c model_instructions_file='));
   });
 
   it('README documents both role prompt files', () => {
@@ -479,6 +470,35 @@ describe('shell quoting for paths with spaces', () => {
   });
 });
 
+// ─── Regression: duet.sh works from checkout path with spaces ────────────────
+
+describe('spaced checkout path', () => {
+  const testDir = '/tmp/duet test spaces-' + process.pid;
+  const spacedRepo = join(testDir, 'with space', 'repo');
+
+  before(() => {
+    mkdirSync(spacedRepo, { recursive: true });
+    execSync(`ln -sf /home/claude/duet/src "${spacedRepo}/src"`);
+    execSync(`ln -sf /home/claude/duet/lib "${spacedRepo}/lib"`);
+    execSync(`ln -sf /home/claude/duet/DUET.md "${spacedRepo}/DUET.md"`);
+    execSync(`ln -sf /home/claude/duet/package.json "${spacedRepo}/package.json"`);
+    execSync(`ln -sf /home/claude/duet/node_modules "${spacedRepo}/node_modules"`);
+    execSync(`cp /home/claude/duet/duet.sh "${spacedRepo}/duet.sh"`);
+  });
+
+  after(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('duet.sh list works when repo path contains spaces', () => {
+    const output = execSync(
+      `bash "${spacedRepo}/duet.sh" list`,
+      { encoding: 'utf8', env: { ...process.env, DUET_BASE: join(testDir, 'state') } }
+    ).trim();
+    assert.ok(output.includes('DUET RUNS'), `Expected DUET RUNS header, got: ${output}`);
+  });
+});
+
 // ─── Bug fix: codex fast-path requires session ID for resume ─────────────────
 
 describe('codex fast-path requires session ID for resume', () => {
@@ -489,7 +509,7 @@ describe('codex fast-path requires session ID for resume', () => {
       script.indexOf('cmd_fork()')
     );
     assert.ok(
-      resumeFunc.includes('[ -n "$codex_binding" ] && [ -n "$codex_sid" ]'),
+      resumeFunc.includes('[ -n "$codex_binding_path" ] && [ -n "$codex_sid" ]'),
       'RESUME_CODEX_PATH export should be gated on codex_sid being present'
     );
   });
@@ -498,15 +518,17 @@ describe('codex fast-path requires session ID for resume', () => {
 // ─── Bug fix: ambiguous run-id prefix errors instead of picking first ────────
 
 describe('ambiguous run-id prefix handling', () => {
-  it('resolve_run_id errors on ambiguous prefix', () => {
+  it('resolve_run_id delegates to JS and errors on ambiguous prefix', () => {
     const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
     const resolveBlock = script.slice(
       script.indexOf('resolve_run_id()'),
-      script.indexOf('resolve_run_id()') + 1200
+      script.indexOf('resolve_run_id()') + 600
     );
-    assert.ok(resolveBlock.includes('ambiguous prefix'), 'Should error on ambiguous prefix');
-    assert.ok(resolveBlock.includes('return 1'), 'Should return non-zero on ambiguity');
-    assert.ok(resolveBlock.includes('${#matches[@]} -eq 1'), 'Should require exactly one match');
+    assert.ok(resolveBlock.includes('resolve-run'), 'Should delegate to JS run-ops');
+    assert.ok(resolveBlock.includes('return 1'), 'Should return non-zero on error');
+    // Verify JS module handles ambiguity
+    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
+    assert.ok(ws.includes('ambiguous prefix'), 'JS module should error on ambiguous prefix');
   });
 });
 

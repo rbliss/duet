@@ -5,7 +5,7 @@ Duet is a tmux-based console that runs Claude Code and Codex side by side, with 
 ## Project structure
 
 ```
-duet.sh             Launcher — subcommand dispatch, run registry, tmux layout, tool launches
+duet.sh             Launcher — shell shim: tmux layout, tool launches, delegates data ops to JS
 router.mjs          Router — command parsing, relay dispatch, watch/converse modes
 bind-sessions.sh    Compatibility shim — execs node src/bindings/reconciler.mjs
 lib/
@@ -13,6 +13,8 @@ lib/
 src/
   bindings/reconciler.mjs       Binding reconciler (ported from bash+python to JS)
   bindings/reconciler.ts        TypeScript type layer (BindingReconcilerEnv)
+  cli/run-ops.mjs               CLI entry point for shell delegation (find-active, resolve-run, etc.)
+  runtime/workspace.mjs         Workspace and run management helpers (ported from duet.sh bash+python)
   transport/tmux-client.mjs     Async tmux transport with per-pane write queues
   relay/session-reader.mjs      Incremental JSONL session reader, response extraction
   runtime/bindings-store.mjs    Binding manifest loader (STATE_DIR, loadBindings)
@@ -20,7 +22,7 @@ src/
   model/manifests.mjs           Runtime manifest schemas (RunManifest, BindingsManifest) with zod
   model/manifests.ts            TypeScript type layer over manifests.mjs
   debug/debug-report.mjs        Debug snapshot collection and rendering
-test/               Test suite (294 tests, 56 suites) — run with: node --test
+test/               Test suite (329 tests, 67 suites) — run with: node --test
 test-support/       Shared test helpers, fake agents, e2e harness
 DUET.md             System prompt injected into both tools at launch
 README.md           User-facing documentation
@@ -36,7 +38,7 @@ docs/
 
 ### Launcher (duet.sh)
 
-Entry point with subcommand dispatch. Creates a tmux session with three panes: Claude Code (top-left), Codex (top-right), router (bottom).
+Shell shim with subcommand dispatch. Creates tmux sessions, launches tools, delegates all data operations (run.json, workspace index, run resolution, listing, destruction) to `src/cli/run-ops.mjs` which calls into `src/runtime/workspace.mjs`.
 
 **Subcommands:**
 - `duet [workdir]` — attach to active run for workspace, or create new
@@ -46,11 +48,8 @@ Entry point with subcommand dispatch. Creates a tmux session with three panes: C
 - `duet destroy <run-id>` — permanently remove a run and its state
 
 **Key responsibilities:**
-- Manages persistent run registry under `~/.local/state/duet/`
-- Generates UUIDs for Claude sessions, discovers Codex session IDs via binding
-- Creates durable per-run `CODEX_HOME` (not under `/tmp`)
-- Maintains workspace index for attach-vs-new logic
-- Writes `run.json` manifest with session IDs, binding paths, status
+- Tmux layout creation, tool process launches, binding env var export
+- Delegates to `node src/cli/run-ops.mjs` for: find-active, resolve-run, write-run-json, read-fields, update-workspace, build-prompt, list-runs, destroy-run
 - Passes `DUET_MODE` (new/resumed/forked) and `DUET_RUN_DIR` to the router
 
 **State layout:**
