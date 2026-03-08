@@ -1,6 +1,6 @@
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { execSync, spawn } from 'child_process';
+import { exec, execSync, spawn } from 'child_process';
 import { existsSync } from 'fs';
 
 import { writeFileSync, mkdirSync, rmSync, appendFileSync, readdirSync, statSync } from 'fs';
@@ -393,20 +393,51 @@ describe('cleanCapture', () => {
   });
 });
 
+// Env vars that duet.sh/bind-sessions.sh use — must be stripped from test env
+// to prevent the live Duet session's values from leaking into binding tests.
+const DUET_ENV_VARS = [
+  'RESUME_CLAUDE_PATH', 'RESUME_CODEX_PATH', 'RESUME_CODEX_SESSION_ID',
+  'STATE_DIR', 'CODEX_SESSIONS', 'CODEX_HOME', 'CLAUDE_PROJECTS',
+  'CLAUDE_SESSION_ID', 'WORKDIR', 'DUET_STATE_DIR', 'DUET_RUN_DIR',
+  'DUET_MODE', 'DUET_SESSION', 'DUET_BASE', 'GLOBAL_CODEX_SESSIONS',
+];
+
+function sanitizedEnv(overrides = {}) {
+  const env = { ...process.env };
+  for (const key of DUET_ENV_VARS) delete env[key];
+  return { ...env, ...overrides };
+}
+
 // ─── Integration Tests: tmux operations ──────────────────────────────────────
 
-const TEST_SESSION = 'duet-test';
+// Isolated tmux socket — all test tmux traffic goes through this socket only.
+// Setting process.env ensures the imported tmuxCmd() in tmux-client.mjs uses
+// the isolated socket for sendKeys/capturePane/pasteToPane/focusPane too.
+const TEST_TMUX_SOCKET = `/tmp/duet-test-tmux-${process.pid}.sock`;
+process.env.DUET_TMUX_SOCKET = TEST_TMUX_SOCKET;
+process.env.TMUX = '';
+
+const TEST_SESSION = `duet-test-${process.pid}`;
 let paneA, paneB;
 
-const tmuxEnv = { ...process.env, TMUX: '' };
+const tmuxEnv = { ...process.env };
 
 function tmux(cmd) {
-  return execSync(`tmux ${cmd}`, { encoding: 'utf8', env: tmuxEnv }).trim();
+  return execSync(`tmux -S ${TEST_TMUX_SOCKET} ${cmd}`, { encoding: 'utf8', env: tmuxEnv }).trim();
 }
 
 function cleanupSession() {
-  try { execSync(`tmux kill-session -t ${TEST_SESSION} 2>/dev/null`, { env: tmuxEnv }); } catch {}
+  try { execSync(`tmux -S ${TEST_TMUX_SOCKET} kill-session -t ${TEST_SESSION} 2>/dev/null`, { env: tmuxEnv, stdio: 'ignore' }); } catch {}
 }
+
+function cleanupTestTmuxServer() {
+  if (!existsSync(TEST_TMUX_SOCKET)) return;
+  try { execSync(`tmux -S ${TEST_TMUX_SOCKET} kill-server 2>/dev/null`, { stdio: 'ignore' }); } catch {}
+  try { execSync(`rm -f ${TEST_TMUX_SOCKET}`, { stdio: 'ignore' }); } catch {}
+}
+
+// Kill the isolated tmux server when the test process exits
+process.on('exit', cleanupTestTmuxServer);
 
 describe('tmux integration', () => {
   before(() => {
@@ -425,10 +456,10 @@ describe('tmux integration', () => {
   beforeEach(() => {
     // Clear both panes between tests
     try {
-      execSync(`tmux send-keys -t ${paneA} C-c`);
-      execSync(`tmux send-keys -t ${paneB} C-c`);
-      execSync(`tmux send-keys -t ${paneA} C-l`);
-      execSync(`tmux send-keys -t ${paneB} C-l`);
+      tmux(`send-keys -t ${paneA} C-c`);
+      tmux(`send-keys -t ${paneB} C-c`);
+      tmux(`send-keys -t ${paneA} C-l`);
+      tmux(`send-keys -t ${paneB} C-l`);
       execSync('sleep 0.3');
     } catch {}
   });
@@ -560,6 +591,41 @@ describe('tmux integration', () => {
       const capB = await capturePane(paneB, 20);
       assert.ok(capB.includes('received relay'), `Expected relay in pane B: ${capB}`);
     });
+  });
+});
+
+// ─── Regression: tmux socket isolation ────────────────────────────────────────
+
+describe('tmux socket isolation', () => {
+  const ISOLATION_SESSION = `duet-isolation-${process.pid}`;
+
+  before(() => {
+    tmux(`new-session -d -s ${ISOLATION_SESSION} -x 80 -y 24`);
+  });
+
+  after(() => {
+    try { tmux(`kill-session -t ${ISOLATION_SESSION}`); } catch {}
+  });
+
+  it('sessions on isolated socket are not visible on the default tmux server', () => {
+    let defaultSessions = '';
+    try {
+      defaultSessions = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null', {
+        encoding: 'utf8',
+        env: { ...tmuxEnv, DUET_TMUX_SOCKET: '' },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch {
+      // No default server running is also fine — proves isolation
+    }
+    assert.ok(!defaultSessions.includes(ISOLATION_SESSION),
+      `Test session "${ISOLATION_SESSION}" should not appear on default tmux server`);
+  });
+
+  it('sessions on isolated socket are visible via the socket', () => {
+    const sessions = tmux('list-sessions -F "#{session_name}"');
+    assert.ok(sessions.includes(ISOLATION_SESSION),
+      `Test session "${ISOLATION_SESSION}" should exist on isolated socket`);
   });
 });
 
@@ -1167,8 +1233,7 @@ describe('launcher binding contract', () => {
   });
 
   function runBind(env) {
-    const fullEnv = {
-      ...process.env,
+    const fullEnv = sanitizedEnv({
       STATE_DIR: stateDir,
       CLAUDE_PROJECTS: claudeProjects,
       CODEX_SESSIONS: codexSessions,
@@ -1176,7 +1241,7 @@ describe('launcher binding contract', () => {
       WORKDIR: '/test/workdir',
       BIND_TIMEOUT: '2',
       ...env,
-    };
+    });
     try {
       execSync('bash /home/claude/duet/bind-sessions.sh', { env: fullEnv, timeout: 10000 });
     } catch {}
@@ -1609,8 +1674,7 @@ describe('binder resume fast-path', () => {
   });
 
   function runBind(env) {
-    const fullEnv = {
-      ...process.env,
+    const fullEnv = sanitizedEnv({
       STATE_DIR: stateDir,
       CLAUDE_PROJECTS: claudeProjects,
       CODEX_SESSIONS: codexSessions,
@@ -1618,7 +1682,7 @@ describe('binder resume fast-path', () => {
       WORKDIR: '/test/workdir',
       BIND_TIMEOUT: '2',
       ...env,
-    };
+    });
     try {
       execSync('bash /home/claude/duet/bind-sessions.sh', { env: fullEnv, timeout: 10000 });
     } catch {}
@@ -2197,8 +2261,7 @@ describe('resume fast-path session ID validation', () => {
   });
 
   function runBind(env) {
-    const fullEnv = {
-      ...process.env,
+    const fullEnv = sanitizedEnv({
       STATE_DIR: stateDir,
       CLAUDE_PROJECTS: claudeProjects,
       CODEX_SESSIONS: codexSessions,
@@ -2206,7 +2269,7 @@ describe('resume fast-path session ID validation', () => {
       WORKDIR: '/test/workdir',
       BIND_TIMEOUT: '2',
       ...env,
-    };
+    });
     try {
       execSync('bash /home/claude/duet/bind-sessions.sh', { env: fullEnv, timeout: 10000 });
     } catch {}
@@ -2943,5 +3006,206 @@ describe('transport delivery failure handling', () => {
     const stateIdx = converseStart.indexOf("converseState = {");
     assert.ok(pasteIdx > 0 && stateIdx > 0, 'both pasteToPane and converseState assignment must exist');
     assert.ok(stateIdx > pasteIdx, `converseState must be set after delivery (paste@${pasteIdx}, state@${stateIdx})`);
+  });
+});
+
+// ─── E2E integration tests with fake agents ──────────────────────────────────
+
+describe('e2e: headless duet with fake agents', { timeout: 60000 }, () => {
+  const testId = `e2e-${process.pid}`;
+  const tempBase = `/tmp/duet-${testId}`;
+  const fakeHome = join(tempBase, 'home');
+  const fakeBin = join(tempBase, 'bin');
+  const workDir = join(tempBase, 'workspace');
+  const inboxDir = join(tempBase, 'inbox');
+  const duetBase = join(fakeHome, '.local', 'state', 'duet');
+  let tmuxSession = null;
+  let runDir = null;
+
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  async function waitFor(fn, timeoutMs = 15000, intervalMs = 300) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const result = fn();
+      if (result) return result;
+      await sleep(intervalMs);
+    }
+    throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+  }
+
+  function findRunDir() {
+    const runsDir = join(duetBase, 'runs');
+    try {
+      for (const d of readdirSync(runsDir)) {
+        const rj = join(runsDir, d, 'run.json');
+        if (existsSync(rj)) return join(runsDir, d);
+      }
+    } catch {}
+    return null;
+  }
+
+  function readBindings() {
+    if (!runDir) return null;
+    const bp = join(runDir, 'bindings.json');
+    try { return JSON.parse(readFileSync(bp, 'utf8')); } catch { return null; }
+  }
+
+  function bothBound() {
+    const b = readBindings();
+    return b && b.claude?.status === 'bound' && b.codex?.status === 'bound' ? b : null;
+  }
+
+  function readInbox(tool) {
+    try { return readFileSync(join(inboxDir, `${tool}-inbox.log`), 'utf8'); } catch { return ''; }
+  }
+
+  async function sendToRouter(text) {
+    // Find the router pane (third pane in session) — uses isolated tmux socket
+    const { stdout } = await e2eExecAsync(
+      `tmux -S ${TEST_TMUX_SOCKET} list-panes -t "${tmuxSession}" -F "#{pane_id}" 2>/dev/null`
+    );
+    const panes = stdout.trim().split('\n');
+    const routerPane = panes[panes.length - 1]; // bottom pane
+    // pasteToPane uses tmuxCmd() which reads DUET_TMUX_SOCKET from process.env
+    await pasteToPane(routerPane, text);
+  }
+
+  async function e2eExecAsync(cmd) {
+    return new Promise((resolve, reject) => {
+      exec(cmd, { encoding: 'utf8', env: tmuxEnv }, (err, stdout, stderr) => {
+        if (err) reject(err); else resolve({ stdout, stderr });
+      });
+    });
+  }
+
+  before(async () => {
+    // Set up temp dirs
+    mkdirSync(fakeBin, { recursive: true });
+    mkdirSync(workDir, { recursive: true });
+    mkdirSync(inboxDir, { recursive: true });
+    mkdirSync(join(fakeHome, '.claude', 'projects'), { recursive: true });
+    mkdirSync(join(fakeHome, '.codex'), { recursive: true });
+
+    // Create fake agent wrappers
+    const nodeExe = process.execPath;
+    const fixturesDir = join(import.meta.dirname, 'test', 'fixtures');
+    writeFileSync(join(fakeBin, 'claude'),
+      `#!/bin/sh\nexec "${nodeExe}" "${fixturesDir}/fake-claude.mjs" "$@"\n`, { mode: 0o755 });
+    writeFileSync(join(fakeBin, 'codex'),
+      `#!/bin/sh\nexec "${nodeExe}" "${fixturesDir}/fake-codex.mjs" "$@"\n`, { mode: 0o755 });
+
+    // Launch duet headlessly on isolated tmux socket
+    const duetScript = join(import.meta.dirname, 'duet.sh');
+    const env = {
+      ...process.env,
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      HOME: fakeHome,
+      DUET_BASE: duetBase,
+      DUET_NO_ATTACH: '1',
+      DUET_TMUX_SOCKET: TEST_TMUX_SOCKET,
+      DUET_INBOX_DIR: inboxDir,
+      TMUX: '',
+      BIND_TIMEOUT: '10',
+      COLUMNS: '120',
+      LINES: '40',
+    };
+    try {
+      execSync(`bash "${duetScript}" "${workDir}"`, { encoding: 'utf8', env, timeout: 10000 });
+    } catch {}
+
+    // Discover the run dir and tmux session
+    await waitFor(() => {
+      runDir = findRunDir();
+      return runDir;
+    }, 5000);
+
+    const rj = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8'));
+    tmuxSession = rj.tmux_session;
+
+    // Wait for both agents to bind
+    await waitFor(bothBound, 20000, 500);
+  });
+
+  after(async () => {
+    if (tmuxSession) {
+      try { execSync(`tmux -S ${TEST_TMUX_SOCKET} kill-session -t "${tmuxSession}" 2>/dev/null`, { env: tmuxEnv }); } catch {}
+    }
+    rmSync(tempBase, { recursive: true, force: true });
+    // Clean up workspace index
+    try { rmSync(join(duetBase, 'workspaces'), { recursive: true, force: true }); } catch {}
+  });
+
+  it('launches headlessly and both agents bind', () => {
+    assert.ok(runDir, 'run dir should exist');
+    assert.ok(tmuxSession, 'tmux session should exist');
+    const b = readBindings();
+    assert.equal(b.claude.status, 'bound');
+    assert.equal(b.codex.status, 'bound');
+  });
+
+  it('codex binding has payload.id different from filename', () => {
+    const b = readBindings();
+    assert.ok(b.codex.path, 'codex should have a binding path');
+    assert.ok(b.codex.session_id, 'codex should have a session_id');
+    // Filename should NOT match session_id (payload.id)
+    const filename = b.codex.path.split('/').pop().replace('.jsonl', '');
+    assert.notEqual(filename, b.codex.session_id,
+      'codex filename should differ from payload.id');
+  });
+
+  it('manual relay: @claude delivers to fake claude', async () => {
+    const token = `MANUAL_${Date.now()}`;
+    await sendToRouter(`@claude ${token}`);
+    // Wait for fake claude to log it
+    await waitFor(() => readInbox('claude').includes(token), 8000);
+    assert.ok(readInbox('claude').includes(token));
+  });
+
+  it('manual relay: @relay claude>codex delivers structured response', async () => {
+    const token = `RELAY_${Date.now()}`;
+    // Send to claude first
+    await sendToRouter(`@claude ${token}`);
+    await waitFor(() => readInbox('claude').includes(token), 8000);
+
+    // Give session log time to update
+    await sleep(1000);
+
+    // Relay to codex
+    await sendToRouter(`@relay claude>codex check this`);
+
+    // Wait for codex to receive the relay
+    await waitFor(() => {
+      const inbox = readInbox('codex');
+      return inbox.includes('claude says') || inbox.includes(token);
+    }, 10000);
+    const codexInbox = readInbox('codex');
+    assert.ok(codexInbox.includes('claude says') || codexInbox.includes(token),
+      'codex should receive relayed claude response');
+  });
+
+  it('watch mode: auto-relays @codex mention from claude to codex', async () => {
+    // Start watch mode
+    await sendToRouter('/watch');
+    await sleep(1000);
+
+    // Send message that triggers fake claude to mention @codex
+    const token = `MENTION_CODEX_${Date.now()}`;
+    await sendToRouter(`@claude ${token}`);
+
+    // Fake claude will respond with "@codex" in the text
+    // Router watcher should detect it and auto-relay to codex
+    // Wait for the specific token (not generic 'claude says' which may exist from prior tests)
+    await waitFor(() => {
+      const inbox = readInbox('codex');
+      return inbox.includes(token);
+    }, 20000);
+
+    const codexInbox = readInbox('codex');
+    assert.ok(codexInbox.includes(token),
+      'codex should receive auto-relayed message containing the mention token');
+
+    // Stop watch
+    await sendToRouter('/stop');
   });
 });

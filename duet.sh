@@ -22,6 +22,12 @@ for cmd in tmux claude codex node; do
   fi
 done
 
+# tmux socket isolation — when DUET_TMUX_SOCKET is set, all tmux commands
+# use a dedicated socket (-S) instead of the default server
+if [ -n "${DUET_TMUX_SOCKET:-}" ]; then
+  tmux() { command tmux -S "$DUET_TMUX_SOCKET" "$@"; }
+fi
+
 # ─── Utility functions ──────────────────────────────────────────────────────
 
 cwd_hash() {
@@ -120,10 +126,10 @@ setup_codex_home() {
   mkdir -p "$codex_home/sessions"
   # Only share read-only config files — never mutable state stores
   for f in auth.json config.toml version.json; do
-    [ -f "$HOME/.codex/$f" ] && ln -sf "$HOME/.codex/$f" "$codex_home/$f"
+    [ -f "$HOME/.codex/$f" ] && ln -sf "$HOME/.codex/$f" "$codex_home/$f" || true
   done
   for d in rules skills; do
-    [ -d "$HOME/.codex/$d" ] && ln -sf "$HOME/.codex/$d" "$codex_home/$d"
+    [ -d "$HOME/.codex/$d" ] && ln -sf "$HOME/.codex/$d" "$codex_home/$d" || true
   done
 }
 
@@ -155,8 +161,8 @@ create_tmux_layout() {
 
   tmux kill-session -t "$session" 2>/dev/null || true
 
-  cols="$(tput cols)"
-  lines="$(tput lines)"
+  cols="${COLUMNS:-$(tput cols 2>/dev/null || echo 120)}"
+  lines="${LINES:-$(tput lines 2>/dev/null || echo 40)}"
   router_height=$(( lines * 30 / 100 ))
   codex_width=$(( (cols - 1) / 2 ))
 
@@ -252,7 +258,7 @@ cmd_new() {
       echo "  run: ${active_run:0:8}"
       echo "  tmux: $tmux_session"
       echo "Stop it first with /quit, or use 'duet destroy ${active_run:0:8}' to remove."
-      tmux attach -t "$tmux_session"
+      [ "${DUET_NO_ATTACH:-}" = "1" ] || tmux attach -t "$tmux_session"
       return
     fi
     # tmux session gone — mark old run as stopped
@@ -324,7 +330,7 @@ cmd_new() {
   # Router
   launch_router "$tmux_session" "$run_dir" "new"
 
-  tmux attach -t "$tmux_session"
+  [ "${DUET_NO_ATTACH:-}" = "1" ] || tmux attach -t "$tmux_session"
 }
 
 # ─── Subcommand: resume ──────────────────────────────────────────────────────
@@ -356,7 +362,7 @@ cmd_resume() {
   # If tmux session still alive, just attach
   if [ -n "$old_tmux" ] && tmux has-session -t "$old_tmux" 2>/dev/null; then
     echo "tmux session still alive — attaching."
-    tmux attach -t "$old_tmux"
+    [ "${DUET_NO_ATTACH:-}" = "1" ] || tmux attach -t "$old_tmux"
     return
   fi
 
@@ -443,7 +449,7 @@ cmd_resume() {
   # Router (mode=resumed triggers EOF-seek)
   launch_router "$tmux_session" "$run_dir" "resumed"
 
-  tmux attach -t "$tmux_session"
+  [ "${DUET_NO_ATTACH:-}" = "1" ] || tmux attach -t "$tmux_session"
 }
 
 # ─── Subcommand: fork ────────────────────────────────────────────────────────
@@ -538,7 +544,7 @@ cmd_fork() {
   bash "$DIR/bind-sessions.sh" &
   launch_router "$tmux_session" "$new_run_dir" "forked"
 
-  tmux attach -t "$tmux_session"
+  [ "${DUET_NO_ATTACH:-}" = "1" ] || tmux attach -t "$tmux_session"
 }
 
 # ─── Subcommand: list ─────────────────────────────────────────────────────────

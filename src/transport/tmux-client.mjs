@@ -1,6 +1,14 @@
 import { exec } from 'child_process';
 import { writeFile, unlink } from 'fs/promises';
 
+// Build tmux command prefix — uses isolated socket when DUET_TMUX_SOCKET is set.
+// Read lazily so tests can set process.env.DUET_TMUX_SOCKET after import.
+function tmuxCmd() {
+  return process.env.DUET_TMUX_SOCKET
+    ? `tmux -S ${process.env.DUET_TMUX_SOCKET}`
+    : 'tmux';
+}
+
 function execAsync(cmd) {
   return new Promise((resolve, reject) => {
     exec(cmd, { encoding: 'utf8' }, (err, stdout, stderr) => {
@@ -34,10 +42,10 @@ export function shellEscape(text) {
 export async function sendKeys(pane, text) {
   return enqueue(pane, async () => {
     try {
-      await execAsync(`tmux send-keys -t ${shellEscape(pane)} -l ${shellEscape(text)}`);
+      await execAsync(`${tmuxCmd()} send-keys -t ${shellEscape(pane)} -l ${shellEscape(text)}`);
       // Small delay so TUI apps (Codex/Ink) can process the input before Enter
       await delay(150);
-      await execAsync(`tmux send-keys -t ${shellEscape(pane)} Enter`);
+      await execAsync(`${tmuxCmd()} send-keys -t ${shellEscape(pane)} Enter`);
       return true;
     } catch {
       return false;
@@ -52,17 +60,17 @@ export async function pasteToPane(pane, text) {
     const tmp = `/tmp/duet-paste-${process.pid}-${seq}.txt`;
     try {
       await writeFile(tmp, text);
-      await execAsync(`tmux load-buffer -b ${shellEscape(bufName)} ${shellEscape(tmp)}`);
-      await execAsync(`tmux paste-buffer -p -b ${shellEscape(bufName)} -t ${shellEscape(pane)}`);
+      await execAsync(`${tmuxCmd()} load-buffer -b ${shellEscape(bufName)} ${shellEscape(tmp)}`);
+      await execAsync(`${tmuxCmd()} paste-buffer -p -b ${shellEscape(bufName)} -t ${shellEscape(pane)}`);
       // Wait for TUI to process the pasted content before submitting
       await delay(500);
-      await execAsync(`tmux send-keys -t ${shellEscape(pane)} Enter`);
+      await execAsync(`${tmuxCmd()} send-keys -t ${shellEscape(pane)} Enter`);
       return true;
     } catch {
       return false;
     } finally {
       try { await unlink(tmp); } catch {}
-      try { await execAsync(`tmux delete-buffer -b ${shellEscape(bufName)}`); } catch {}
+      try { await execAsync(`${tmuxCmd()} delete-buffer -b ${shellEscape(bufName)}`); } catch {}
     }
   });
 }
@@ -70,7 +78,7 @@ export async function pasteToPane(pane, text) {
 export async function capturePane(pane, lines = 50) {
   try {
     const { stdout } = await execAsync(
-      `tmux capture-pane -t ${shellEscape(pane)} -p -S -${lines}`
+      `${tmuxCmd()} capture-pane -t ${shellEscape(pane)} -p -S -${lines}`
     );
     return stdout;
   } catch {
@@ -80,7 +88,7 @@ export async function capturePane(pane, lines = 50) {
 
 export async function focusPane(pane) {
   try {
-    await execAsync(`tmux select-pane -t ${shellEscape(pane)}`);
+    await execAsync(`${tmuxCmd()} select-pane -t ${shellEscape(pane)}`);
     return true;
   } catch {
     return false;
@@ -89,7 +97,7 @@ export async function focusPane(pane) {
 
 export async function killSession(session) {
   try {
-    await execAsync(`tmux kill-session -t ${shellEscape(session)}`);
+    await execAsync(`${tmuxCmd()} kill-session -t ${shellEscape(session)}`);
     return true;
   } catch {
     return false;
@@ -98,7 +106,7 @@ export async function killSession(session) {
 
 export async function detachClient(session) {
   try {
-    await execAsync(`tmux detach-client -s ${shellEscape(session)}`);
+    await execAsync(`${tmuxCmd()} detach-client -s ${shellEscape(session)}`);
     return true;
   } catch {
     return false;
@@ -108,7 +116,7 @@ export async function detachClient(session) {
 export async function displayMessage(target, fmt) {
   try {
     const { stdout } = await execAsync(
-      `tmux display-message -t ${shellEscape(target)} -p ${shellEscape(fmt)}`
+      `${tmuxCmd()} display-message -t ${shellEscape(target)} -p ${shellEscape(fmt)}`
     );
     return stdout.trim();
   } catch {
