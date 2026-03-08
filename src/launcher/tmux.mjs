@@ -9,6 +9,7 @@
  */
 
 import { execFileSync, spawnSync } from 'child_process';
+import { entryPaths, nodeArgs } from '../runtime/entry-paths.mjs';
 
 /**
  * Shell-quote a string for safe interpolation into commands typed into tmux panes.
@@ -109,10 +110,10 @@ export function createTmuxLayout(tmux, session) {
  * @param {string} routerPane
  * @param {LaunchRouterOptions} options
  */
-export function launchRouter(tmux, routerPane, { session, runDir, mode, claudePane, codexPane, duetDir }) {
+export function launchRouter(tmux, routerPane, { session, runDir, mode, claudePane, codexPane }) {
   const qRunDir = shellQuote(runDir);
-  const qDir = shellQuote(duetDir);
-  const cmd = `DUET_SESSION=${shellQuote(session)} CLAUDE_PANE=${claudePane} CODEX_PANE=${codexPane} DUET_STATE_DIR=${qRunDir} DUET_MODE=${mode} DUET_RUN_DIR=${qRunDir} node ${qDir}/router.mjs`;
+  const nodeCmd = ['node', ...nodeArgs, shellQuote(entryPaths.router)].join(' ');
+  const cmd = `DUET_SESSION=${shellQuote(session)} CLAUDE_PANE=${claudePane} CODEX_PANE=${codexPane} DUET_STATE_DIR=${qRunDir} DUET_MODE=${mode} DUET_RUN_DIR=${qRunDir} ${nodeCmd}`;
   tmux('send-keys', '-t', routerPane, cmd, 'Enter');
   tmux('select-pane', '-t', routerPane);
 }

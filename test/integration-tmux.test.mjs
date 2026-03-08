@@ -259,3 +259,83 @@ describe('duet.sh launcher', () => {
     assert.equal(mouse, 'on');
   });
 });
+
+// ─── Regression: cross-process paste safety ─────────────────────────────────
+
+describe('cross-process paste safety', { timeout: 30000 }, () => {
+  const XPROC_SESSION = `duet-xproc-${process.pid}`;
+  let xpaneA, xpaneB;
+
+  before(() => {
+    try { tmux(`kill-session -t ${XPROC_SESSION}`); } catch {}
+    xpaneA = tmux(`new-session -d -s ${XPROC_SESSION} -x 120 -y 40 -P -F '#{pane_id}'`);
+    xpaneB = tmux(`split-window -h -t '${xpaneA}' -l 59 -P -F '#{pane_id}'`);
+    execSync('sleep 0.5');
+  });
+
+  after(() => {
+    try { tmux(`kill-session -t ${XPROC_SESSION}`); } catch {}
+  });
+
+  it('concurrent pasteToPane from two processes does not collide', async () => {
+    const markerA = `XPROC_A_${Date.now()}`;
+    const markerB = `XPROC_B_${Date.now()}`;
+
+    // Spawn two independent Node processes that each call pasteToPane
+    // on the same tmux server (via DUET_TMUX_SOCKET) but to different panes.
+    const transportPath = new URL('../src/transport/tmux-client.mjs', import.meta.url).href;
+    const helperScript = (pane, marker) => `
+      import { pasteToPane } from '${transportPath}';
+      const ok = await pasteToPane(${JSON.stringify(pane)}, 'echo ${marker}');
+      process.exit(ok ? 0 : 1);
+    `;
+
+    const { execSync: es } = await import('child_process');
+    const { writeFileSync, unlinkSync } = await import('fs');
+
+    // Write helper scripts
+    const scriptA = `/tmp/duet-xproc-a-${process.pid}.mjs`;
+    const scriptB = `/tmp/duet-xproc-b-${process.pid}.mjs`;
+    writeFileSync(scriptA, helperScript(xpaneA, markerA));
+    writeFileSync(scriptB, helperScript(xpaneB, markerB));
+
+    try {
+      // Launch both concurrently via Promise.all with exec
+      const { exec } = await import('child_process');
+      const runHelper = (script) => new Promise((resolve, reject) => {
+        exec(`node --import tsx/esm "${script}"`, {
+          encoding: 'utf8',
+          env: tmuxEnv,
+          timeout: 15000,
+          cwd: process.cwd(),
+        }, (err, stdout, stderr) => {
+          if (err) reject(new Error(`Helper failed: ${stderr || err.message}`));
+          else resolve(stdout);
+        });
+      });
+
+      await Promise.all([runHelper(scriptA), runHelper(scriptB)]);
+
+      // Wait for panes to process
+      execSync('sleep 1');
+
+      // Verify each pane got its own marker
+      const capA = await capturePane(xpaneA, 20);
+      const capB = await capturePane(xpaneB, 20);
+
+      assert.ok(capA.includes(markerA),
+        `Pane A should contain marker A: ${capA}`);
+      assert.ok(capB.includes(markerB),
+        `Pane B should contain marker B: ${capB}`);
+
+      // Verify no cross-contamination
+      assert.ok(!capA.includes(markerB),
+        `Pane A should NOT contain marker B`);
+      assert.ok(!capB.includes(markerA),
+        `Pane B should NOT contain marker A`);
+    } finally {
+      try { unlinkSync(scriptA); } catch {}
+      try { unlinkSync(scriptB); } catch {}
+    }
+  });
+});

@@ -6,8 +6,8 @@
  */
 
 import { statSync, openSync, readSync, closeSync, readFileSync } from 'fs';
-import { STATE_DIR, loadBindings } from '../runtime/bindings-store.mjs';
-import { updateRunJson } from '../runtime/run-store.mjs';
+import { STATE_DIR, loadBindings } from '../runtime/bindings-store.js';
+import { updateRunJson } from '../runtime/run-store.js';
 
 let DUET_MODE = process.env.DUET_MODE || 'new';
 

@@ -3,15 +3,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
-    "test": "node --test"
+    "test": "node --import tsx/esm --test"
   },
   "dependencies": {
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^25.3.5",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.0"
   }
 }

@@ -48,7 +48,8 @@ function enqueue(pane, fn) {
   return next;
 }
 
-// Monotonic counter for unique buffer names and temp files across concurrent pastes
+// Monotonic counter for unique buffer names and temp files across concurrent pastes.
+// Buffer names include PID to avoid collisions when multiple processes share a tmux server.
 let pasteSeq = 0;
 
 /**
@@ -88,7 +89,7 @@ export async function pasteToPane(pane, text) {
   if (!pane) return false;
   return enqueue(pane, async () => {
     const seq = pasteSeq++;
-    const bufName = `duet-${seq}`;
+    const bufName = `duet-${process.pid}-${seq}`;
     const tmp = `/tmp/duet-paste-${process.pid}-${seq}.txt`;
     try {
       await writeFile(tmp, text);

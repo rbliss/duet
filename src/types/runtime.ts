@@ -47,7 +47,6 @@ export interface LaunchRouterOptions {
   mode: string;
   claudePane: string;
   codexPane: string;
-  duetDir: string;
 }
 
 // ─── Router: parsed input ────────────────────────────────────────────────────

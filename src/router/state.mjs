@@ -19,7 +19,7 @@ import {
 
 /** @type {SessionStateMap} */
 const sessionState = _sessionState;
-import { updateRunJson } from '../runtime/run-store.mjs';
+import { updateRunJson } from '../runtime/run-store.js';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 

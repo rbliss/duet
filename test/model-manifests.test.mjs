@@ -6,7 +6,7 @@ import {
   parseBindingsManifest,
   RunManifestSchema,
   BindingsManifestSchema,
-} from '../src/model/manifests.mjs';
+} from '../src/model/manifests.js';
 
 // ─── RunManifest schema ──────────────────────────────────────────────────────
 

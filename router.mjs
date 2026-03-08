@@ -6,8 +6,8 @@
 // ─── Re-exports: existing modules (unchanged) ───────────────────────────────
 
 export { shellEscape, sendKeys, pasteToPane, capturePane, focusPane } from './src/transport/tmux-client.mjs';
-export { setRunDir, updateRunJson } from './src/runtime/run-store.mjs';
-export { STATE_DIR, setStateDir } from './src/runtime/bindings-store.mjs';
+export { setRunDir, updateRunJson } from './src/runtime/run-store.js';
+export { STATE_DIR, setStateDir } from './src/runtime/bindings-store.js';
 export { collectDebugSnapshot, renderDebugReport } from './src/debug/debug-report.mjs';
 export {
   sessionState, resolveSessionPath, readIncremental,

@@ -20,6 +20,7 @@ import {
   tmuxHasSession,
   tmuxAttach,
 } from './tmux.mjs';
+import { entryPaths, nodeArgs } from '../runtime/entry-paths.mjs';
 import {
   nowIso,
   readRunField,
@@ -55,11 +56,8 @@ function ensureDirs(cfg) {
   mkdirSync(cfg.workspacesDir, { recursive: true });
 }
 
-/**
- * @param {string} duetDir
- */
-function startReconciler(duetDir) {
-  const child = spawn('node', [join(duetDir, 'src/bindings/reconciler.mjs')], {
+function startReconciler() {
+  const child = spawn('node', [...nodeArgs, entryPaths.reconciler], {
     detached: true,
     stdio: 'ignore',
     env: process.env,
@@ -209,11 +207,10 @@ export function cmdNew(workdirArg) {
   tmux('send-keys', '-t', panes.claudePane, `cd ${qWorkdir} && ${claudeCmd}`, 'Enter');
   tmux('send-keys', '-t', panes.codexPane, `cd ${qWorkdir} && ${codexCmd}`, 'Enter');
 
-  startReconciler(cfg.duetDir);
+  startReconciler();
   launchRouter(tmux, panes.routerPane, {
     session: tmuxSession, runDir, mode: 'new',
     claudePane: panes.claudePane, codexPane: panes.codexPane,
-    duetDir: cfg.duetDir,
   });
 
   if (!cfg.noAttach) process.exitCode = tmuxAttach(tmuxSession, cfg.socket);
@@ -315,11 +312,10 @@ export function cmdResume(ref) {
   tmux('send-keys', '-t', panes.claudePane, `cd ${qCwd} && ${claudeCmd}`, 'Enter');
   tmux('send-keys', '-t', panes.codexPane, `cd ${qCwd} && ${codexCmd}`, 'Enter');
 
-  startReconciler(cfg.duetDir);
+  startReconciler();
   launchRouter(tmux, panes.routerPane, {
     session: tmuxSession, runDir, mode: 'resumed',
     claudePane: panes.claudePane, codexPane: panes.codexPane,
-    duetDir: cfg.duetDir,
   });
 
   if (!cfg.noAttach) process.exitCode = tmuxAttach(tmuxSession, cfg.socket);
@@ -405,11 +401,10 @@ export function cmdFork(ref) {
   tmux('send-keys', '-t', panes.claudePane, `cd ${qCwd} && ${claudeCmd}`, 'Enter');
   tmux('send-keys', '-t', panes.codexPane, `cd ${qCwd} && ${codexCmd}`, 'Enter');
 
-  startReconciler(cfg.duetDir);
+  startReconciler();
   launchRouter(tmux, panes.routerPane, {
     session: tmuxSession, runDir: newRunDir, mode: 'forked',
     claudePane: panes.claudePane, codexPane: panes.codexPane,
-    duetDir: cfg.duetDir,
   });
 
   if (!cfg.noAttach) process.exitCode = tmuxAttach(tmuxSession, cfg.socket);

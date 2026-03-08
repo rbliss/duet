@@ -27,8 +27,8 @@ import { sessionState as _sessionState, resolveSessionPath } from '../relay/sess
 
 /** @type {SessionStateMap} */
 const sessionState = _sessionState;
-import { loadBindings } from '../runtime/bindings-store.mjs';
-import { updateRunJson } from '../runtime/run-store.mjs';
+import { loadBindings } from '../runtime/bindings-store.js';
+import { updateRunJson } from '../runtime/run-store.js';
 import { collectDebugSnapshot, renderDebugReport } from '../debug/debug-report.mjs';
 
 // ─── Output relay ────────────────────────────────────────────────────────────
@@ -437,3 +437,16 @@ export function main() {
     process.exit(0);
   });
 }
+
+// ─── CLI entry point ──────────────────────────────────────────────────────────
+
+// When run directly (not imported via router.mjs), auto-invoke main().
+// This enables the dist path: node dist/router/controller.js
+const isMain = process.argv[1] && (
+  process.argv[1].endsWith('/controller.mjs') ||
+  process.argv[1].endsWith('/controller.js') ||
+  process.argv[1].endsWith('\\controller.mjs') ||
+  process.argv[1].endsWith('\\controller.js')
+);
+
+if (isMain) main();
