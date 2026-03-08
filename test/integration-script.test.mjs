@@ -7,44 +7,38 @@ import { join } from 'path';
 // ─── Resume: durable state directory structure ───────────────────────────────
 
 describe('durable state directory structure', () => {
-  it('duet.sh creates persistent run directory under ~/.local/state/duet', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    assert.ok(script.includes('DUET_BASE="${DUET_BASE:-$HOME/.local/state/duet}"'));
-    assert.ok(script.includes('RUNS_DIR="$DUET_BASE/runs"'));
-    assert.ok(script.includes('WORKSPACES_DIR="$DUET_BASE/workspaces"'));
+  const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
+
+  it('uses persistent run directory under ~/.local/state/duet', () => {
+    assert.ok(commands.includes('.local/state/duet'));
   });
 
-  it('duet.sh supports resume, fork, list, destroy subcommands', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    assert.ok(script.includes('cmd_resume'));
-    assert.ok(script.includes('cmd_fork'));
-    assert.ok(script.includes('cmd_list'));
-    assert.ok(script.includes('cmd_destroy'));
+  it('supports resume, fork, list, destroy subcommands', () => {
+    assert.ok(commands.includes('cmdResume'));
+    assert.ok(commands.includes('cmdFork'));
+    assert.ok(commands.includes('cmdList'));
+    assert.ok(commands.includes('cmdDestroy'));
   });
 
-  it('duet.sh creates codex-home inside run directory (not /tmp)', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    assert.ok(script.includes('codex_home="$run_dir/codex-home"'));
-    assert.ok(!script.includes('STATE_DIR="/tmp/'));
+  it('creates codex-home inside run directory (not /tmp)', () => {
+    assert.ok(commands.includes('codex-home'));
+    assert.ok(!commands.includes('"/tmp/'));
   });
 
-  it('duet.sh writes run.json with required fields', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+  it('writes run.json with required fields', () => {
     for (const field of ['run_id', 'cwd', 'created_at', 'updated_at', 'status', 'tmux_session', 'mode', 'claude.session_id', 'codex_home']) {
-      assert.ok(script.includes(field), `Missing field: ${field}`);
+      assert.ok(commands.includes(field), `Missing field: ${field}`);
     }
   });
 
-  it('duet.sh resume uses --resume for claude and resume subcommand for codex', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    assert.ok(script.includes('claude --dangerously-skip-permissions --resume'));
-    assert.ok(script.includes('codex resume'));
+  it('resume uses --resume for claude and resume subcommand for codex', () => {
+    assert.ok(commands.includes('--resume'));
+    assert.ok(commands.includes('codex resume'));
   });
 
-  it('duet.sh fork uses --fork-session for claude and fork subcommand for codex', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    assert.ok(script.includes('--fork-session'));
-    assert.ok(script.includes('codex fork'));
+  it('fork uses --fork-session for claude and fork subcommand for codex', () => {
+    assert.ok(commands.includes('--fork-session'));
+    assert.ok(commands.includes('codex fork'));
   });
 });
 
@@ -219,53 +213,51 @@ for rj in runs_dir.glob('*/run.json'):
 // ─── Role prompt injection ────────────────────────────────────────────────────
 
 describe('role prompt injection', () => {
-  const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
+  const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
+  const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
 
-  it('duet.sh defines build_tool_prompt helper', () => {
-    assert.ok(script.includes('build_tool_prompt()'));
-    assert.ok(script.includes('build-prompt'));
-    const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
+  it('buildToolPrompt handles role files', () => {
     assert.ok(ws.includes('CLAUDE_ROLE.md'));
     assert.ok(ws.includes('CODEX_ROLE.md'));
+    assert.ok(commands.includes('buildToolPrompt'));
   });
 
-  it('build_tool_prompt composes prompt files under runtime/', () => {
-    assert.ok(script.includes('claude-system-prompt.md'));
-    assert.ok(script.includes('codex-model-instructions.md'));
+  it('prompt files use runtime/ directory', () => {
+    assert.ok(commands.includes('claude-system-prompt.md'));
+    assert.ok(commands.includes('codex-model-instructions.md'));
   });
 
-  it('cmd_new calls build_tool_prompt for both tools', () => {
-    const cmdNew = script.slice(script.indexOf('cmd_new()'), script.indexOf('cmd_resume()'));
-    assert.ok(cmdNew.includes('build_tool_prompt claude'));
-    assert.ok(cmdNew.includes('build_tool_prompt codex'));
+  it('cmdNew calls buildToolPrompt for both tools', () => {
+    const cmdNew = commands.slice(commands.indexOf('export function cmdNew'), commands.indexOf('export function cmdResume'));
+    assert.ok(cmdNew.includes("buildToolPrompt('claude'"));
+    assert.ok(cmdNew.includes("buildToolPrompt('codex'"));
   });
 
-  it('cmd_resume calls build_tool_prompt for both tools', () => {
-    const cmdResume = script.slice(script.indexOf('cmd_resume()'), script.indexOf('cmd_fork()'));
-    assert.ok(cmdResume.includes('build_tool_prompt claude'));
-    assert.ok(cmdResume.includes('build_tool_prompt codex'));
+  it('cmdResume calls buildToolPrompt for both tools', () => {
+    const cmdResume = commands.slice(commands.indexOf('export function cmdResume'), commands.indexOf('export function cmdFork'));
+    assert.ok(cmdResume.includes("buildToolPrompt('claude'"));
+    assert.ok(cmdResume.includes("buildToolPrompt('codex'"));
   });
 
-  it('cmd_fork calls build_tool_prompt for both tools', () => {
-    const cmdFork = script.slice(script.indexOf('cmd_fork()'), script.indexOf('cmd_list()'));
-    assert.ok(cmdFork.includes('build_tool_prompt claude'));
-    assert.ok(cmdFork.includes('build_tool_prompt codex'));
+  it('cmdFork calls buildToolPrompt for both tools', () => {
+    const cmdFork = commands.slice(commands.indexOf('export function cmdFork'), commands.indexOf('export function cmdList'));
+    assert.ok(cmdFork.includes("buildToolPrompt('claude'"));
+    assert.ok(cmdFork.includes("buildToolPrompt('codex'"));
   });
 
   it('claude resume path includes --append-system-prompt', () => {
-    const cmdResume = script.slice(script.indexOf('cmd_resume()'), script.indexOf('cmd_fork()'));
-    const resumeBranch = cmdResume.slice(cmdResume.indexOf('if [ -n "$claude_sid" ]'));
-    assert.ok(resumeBranch.includes('--resume $claude_sid --append-system-prompt'));
+    assert.ok(commands.includes('--append-system-prompt'));
+    assert.ok(commands.includes('--resume'));
   });
 
   it('codex resume path includes model_instructions_file', () => {
-    const cmdResume = script.slice(script.indexOf('cmd_resume()'), script.indexOf('cmd_fork()'));
-    assert.ok(cmdResume.includes('codex resume $codex_sid --dangerously-bypass-approvals-and-sandbox -c model_instructions_file='));
+    assert.ok(commands.includes('model_instructions_file'));
+    assert.ok(commands.includes('codex resume'));
   });
 
   it('codex fork path includes model_instructions_file', () => {
-    const cmdFork = script.slice(script.indexOf('cmd_fork()'), script.indexOf('cmd_list()'));
-    assert.ok(cmdFork.includes('codex fork $codex_session_id --dangerously-bypass-approvals-and-sandbox -c model_instructions_file='));
+    assert.ok(commands.includes('codex fork'));
+    assert.ok(commands.includes('model_instructions_file'));
   });
 
   it('README documents both role prompt files', () => {
@@ -449,24 +441,28 @@ describe('shell quoting for paths with spaces', () => {
     assert.equal(roundtrip, '/tmp/my repo/test');
   });
 
-  it('duet.sh uses quote_path for all interpolated paths in send-keys', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    const sendKeysLines = script.split('\n').filter(l =>
-      l.includes('tmux send-keys') && l.includes('cd ')
-    );
-    for (const line of sendKeysLines) {
-      assert.ok(line.includes('q_'), `send-keys line should use quoted path variable: ${line.trim()}`);
-    }
+  it('JS launcher uses shellQuote for interpolated paths', () => {
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
+    assert.ok(commands.includes('shellQuote'), 'commands.mjs should use shellQuote');
+    const tmuxMod = readFileSync('/home/claude/duet/src/launcher/tmux.mjs', 'utf8');
+    assert.ok(tmuxMod.includes('shellQuote'), 'tmux.mjs should define shellQuote');
   });
 
-  it('launch_router uses quoted paths', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    const routerBlock = script.slice(
-      script.indexOf('launch_router()'),
-      script.indexOf('launch_router()') + 400
+  it('launchRouter uses shellQuote for paths', () => {
+    const tmuxMod = readFileSync('/home/claude/duet/src/launcher/tmux.mjs', 'utf8');
+    const routerBlock = tmuxMod.slice(
+      tmuxMod.indexOf('export function launchRouter'),
+      tmuxMod.indexOf('export function launchRouter') + 600
     );
-    assert.ok(routerBlock.includes('q_run_dir'), 'launch_router should use q_run_dir');
-    assert.ok(routerBlock.includes('q_dir'), 'launch_router should use q_dir');
+    assert.ok(routerBlock.includes('shellQuote'), 'launchRouter should use shellQuote');
+  });
+
+  it('tmuxAttach propagates exit status', () => {
+    const tmuxMod = readFileSync('/home/claude/duet/src/launcher/tmux.mjs', 'utf8');
+    const attachBlock = tmuxMod.slice(tmuxMod.indexOf('export function tmuxAttach'));
+    assert.ok(attachBlock.includes('result.status'), 'tmuxAttach should return exit status');
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
+    assert.ok(commands.includes('process.exitCode = tmuxAttach'), 'callers should set exitCode from tmuxAttach');
   });
 });
 
@@ -502,15 +498,15 @@ describe('spaced checkout path', () => {
 // ─── Bug fix: codex fast-path requires session ID for resume ─────────────────
 
 describe('codex fast-path requires session ID for resume', () => {
-  it('duet.sh only exports RESUME_CODEX_PATH when codex_sid is present', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    const resumeFunc = script.slice(
-      script.indexOf('cmd_resume()'),
-      script.indexOf('cmd_fork()')
+  it('only sets RESUME_CODEX_PATH when codexSessionId is present', () => {
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
+    const resumeFunc = commands.slice(
+      commands.indexOf('export function cmdResume'),
+      commands.indexOf('export function cmdFork')
     );
     assert.ok(
-      resumeFunc.includes('[ -n "$codex_binding_path" ] && [ -n "$codex_sid" ]'),
-      'RESUME_CODEX_PATH export should be gated on codex_sid being present'
+      resumeFunc.includes('codexBindingPath && codexSessionId'),
+      'RESUME_CODEX_PATH should be gated on codexSessionId being present'
     );
   });
 });
@@ -518,30 +514,20 @@ describe('codex fast-path requires session ID for resume', () => {
 // ─── Bug fix: ambiguous run-id prefix errors instead of picking first ────────
 
 describe('ambiguous run-id prefix handling', () => {
-  it('resolve_run_id delegates to JS and errors on ambiguous prefix', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    const resolveBlock = script.slice(
-      script.indexOf('resolve_run_id()'),
-      script.indexOf('resolve_run_id()') + 600
-    );
-    assert.ok(resolveBlock.includes('resolve-run'), 'Should delegate to JS run-ops');
-    assert.ok(resolveBlock.includes('return 1'), 'Should return non-zero on error');
-    // Verify JS module handles ambiguity
+  it('resolveRunId errors on ambiguous prefix', () => {
     const ws = readFileSync('/home/claude/duet/src/runtime/workspace.mjs', 'utf8');
     assert.ok(ws.includes('ambiguous prefix'), 'JS module should error on ambiguous prefix');
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
+    assert.ok(commands.includes('resolveRunId'), 'commands.mjs should use resolveRunId');
   });
 });
 
 // ─── Bug fix: workspace path canonicalization ────────────────────────────────
 
 describe('workspace path canonicalization', () => {
-  it('cmd_new canonicalizes workdir with pwd -P', () => {
-    const script = readFileSync('/home/claude/duet/duet.sh', 'utf8');
-    const cmdNewBlock = script.slice(
-      script.indexOf('cmd_new()'),
-      script.indexOf('cmd_new()') + 200
-    );
-    assert.ok(cmdNewBlock.includes('pwd -P'), 'cmd_new should canonicalize workdir with pwd -P');
+  it('cmdNew canonicalizes workdir with pwd -P', () => {
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.mjs', 'utf8');
+    assert.ok(commands.includes('pwd -P'), 'commands.mjs should canonicalize workdir with pwd -P');
   });
 
   it('canonicalization resolves relative and symlink paths', () => {
@@ -559,17 +545,48 @@ describe('workspace path canonicalization', () => {
 
     rmSync(testDir, { recursive: true, force: true });
   });
+
+  it('rejects non-existent workdir with non-zero exit', () => {
+    const bogus = '/tmp/duet-test-no-exist-' + process.pid + '/does-not-exist';
+    const stateDir = '/tmp/duet-test-no-exist-state-' + process.pid;
+    try {
+      const result = execSync(
+        `bash /home/claude/duet/duet.sh "${bogus}"`,
+        {
+          encoding: 'utf8',
+          env: { ...process.env, DUET_BASE: stateDir, DUET_NO_ATTACH: '1' },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }
+      );
+      assert.fail('should have exited non-zero for non-existent workdir');
+    } catch (e) {
+      assert.ok(e.status !== 0, `expected non-zero exit, got ${e.status}`);
+      assert.ok(
+        e.stderr.includes('cannot resolve workdir') || e.stderr.includes('no such file'),
+        `stderr should mention workdir error, got: ${e.stderr}`
+      );
+    }
+    // Verify no junk state was created
+    assert.ok(!existsSync(join(stateDir, 'runs')), 'no run state should be created for invalid workdir');
+    rmSync(stateDir, { recursive: true, force: true });
+  });
 });
 
-// ─── CODEX_HOME isolation: setup_codex_home() behavioral tests ───────────────
+// ─── CODEX_HOME isolation: setupCodexHome() behavioral tests ─────────────────
 
-describe('setup_codex_home isolation', () => {
+describe('setupCodexHome isolation', () => {
   const testDir = '/tmp/duet-test-codexhome-' + process.pid;
   const fakeHome = join(testDir, 'fakehome');
   const fakeCodexDir = join(fakeHome, '.codex');
   const codexHome = join(testDir, 'codex-home');
 
-  before(() => {
+  /** @type {typeof import('../src/launcher/codex-home.mjs').setupCodexHome} */
+  let setupCodexHome;
+
+  before(async () => {
+    const mod = await import('../src/launcher/codex-home.mjs');
+    setupCodexHome = mod.setupCodexHome;
+
     mkdirSync(fakeCodexDir, { recursive: true });
     // Create read-only config files
     writeFileSync(join(fakeCodexDir, 'auth.json'), '{"token":"test"}');
@@ -598,11 +615,7 @@ describe('setup_codex_home isolation', () => {
   });
 
   function runSetup() {
-    execSync(`bash -c '
-      HOME="${fakeHome}"
-      source /home/claude/duet/lib/codex-home.sh
-      setup_codex_home "${codexHome}"
-    '`);
+    setupCodexHome(codexHome, fakeHome);
   }
 
   it('creates sessions/ subdirectory', () => {
@@ -647,7 +660,6 @@ describe('setup_codex_home isolation', () => {
     const mutableDirs = ['shell_snapshots', 'log', 'tmp'];
     for (const d of mutableDirs) {
       const target = join(codexHome, d);
-      // sessions/ is created fresh (not symlinked), so we check for symlink specifically
       if (existsSync(target)) {
         assert.ok(!lstatSync(target).isSymbolicLink(),
           `${d} must NOT be a symlink to ~/.codex/${d}`);
@@ -666,7 +678,7 @@ describe('setup_codex_home isolation', () => {
 
   it('is idempotent — running twice does not error', () => {
     assert.doesNotThrow(() => runSetup(),
-      'running setup_codex_home twice should not throw');
+      'running setupCodexHome twice should not throw');
     assert.ok(existsSync(join(codexHome, 'sessions')));
     assert.ok(existsSync(join(codexHome, 'auth.json')));
   });

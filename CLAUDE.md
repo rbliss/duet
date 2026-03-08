@@ -5,16 +5,20 @@ Duet is a tmux-based console that runs Claude Code and Codex side by side, with 
 ## Project structure
 
 ```
-duet.sh             Launcher — shell shim: tmux layout, tool launches, delegates data ops to JS
+duet.sh             Thin compatibility shim — execs node src/cli/duet.mjs
 router.mjs          Router — command parsing, relay dispatch, watch/converse modes
 bind-sessions.sh    Compatibility shim — execs node src/bindings/reconciler.mjs
 lib/
-  codex-home.sh               Sourceable helper: CODEX_HOME overlay setup (used by duet.sh, tested directly)
+  codex-home.sh               Legacy bash helper (retained for backward compat)
 src/
+  cli/duet.mjs                  JS launcher entry point: preflight, subcommand dispatch
+  cli/run-ops.mjs               CLI entry point for run-ops (find-active, resolve-run, etc.)
+  launcher/commands.mjs         Launch commands: cmdNew, cmdResume, cmdFork, cmdList, cmdDestroy
+  launcher/tmux.mjs             Sync tmux helpers: layout creation, shellQuote, attach
+  launcher/codex-home.mjs       CODEX_HOME overlay setup (ported from lib/codex-home.sh)
   bindings/reconciler.mjs       Binding reconciler (ported from bash+python to JS)
   bindings/reconciler.ts        TypeScript type layer (BindingReconcilerEnv)
-  cli/run-ops.mjs               CLI entry point for shell delegation (find-active, resolve-run, etc.)
-  runtime/workspace.mjs         Workspace and run management helpers (ported from duet.sh bash+python)
+  runtime/workspace.mjs         Workspace and run management helpers
   transport/tmux-client.mjs     Async tmux transport with per-pane write queues
   relay/session-reader.mjs      Incremental JSONL session reader, response extraction
   runtime/bindings-store.mjs    Binding manifest loader (STATE_DIR, loadBindings)
@@ -22,7 +26,7 @@ src/
   model/manifests.mjs           Runtime manifest schemas (RunManifest, BindingsManifest) with zod
   model/manifests.ts            TypeScript type layer over manifests.mjs
   debug/debug-report.mjs        Debug snapshot collection and rendering
-test/               Test suite (329 tests, 67 suites) — run with: node --test
+test/               Test suite (331 tests, 67 suites) — run with: node --test
 test-support/       Shared test helpers, fake agents, e2e harness
 DUET.md             System prompt injected into both tools at launch
 README.md           User-facing documentation
@@ -38,19 +42,21 @@ docs/
 
 ### Launcher (duet.sh)
 
-Shell shim with subcommand dispatch. Creates tmux sessions, launches tools, delegates all data operations (run.json, workspace index, run resolution, listing, destruction) to `src/cli/run-ops.mjs` which calls into `src/runtime/workspace.mjs`.
+Thin bash shim (`duet.sh`) that execs `node src/cli/duet.mjs`. All launcher logic is in JS.
 
-**Subcommands:**
+**Subcommands** (dispatched by `src/cli/duet.mjs`):
 - `duet [workdir]` — attach to active run for workspace, or create new
 - `duet resume [run-id|last]` — resume a stopped run with native CLI resume
 - `duet fork [run-id|last]` — fork from an existing run
 - `duet list` — show all runs with status
 - `duet destroy <run-id>` — permanently remove a run and its state
 
-**Key responsibilities:**
-- Tmux layout creation, tool process launches, binding env var export
-- Delegates to `node src/cli/run-ops.mjs` for: find-active, resolve-run, write-run-json, read-fields, update-workspace, build-prompt, list-runs, destroy-run
-- Passes `DUET_MODE` (new/resumed/forked) and `DUET_RUN_DIR` to the router
+**Key modules:**
+- `src/cli/duet.mjs` — preflight checks, subcommand dispatch
+- `src/launcher/commands.mjs` — `cmdNew`, `cmdResume`, `cmdFork`, `cmdList`, `cmdDestroy`
+- `src/launcher/tmux.mjs` — `createTmuxLayout`, `launchRouter`, `tmuxAttach`, `shellQuote`
+- `src/launcher/codex-home.mjs` — `setupCodexHome` (ported from bash)
+- `src/runtime/workspace.mjs` — data operations (run.json, workspace index, resolution)
 
 **State layout:**
 ```
