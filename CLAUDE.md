@@ -8,13 +8,17 @@ Duet is a tmux-based console that runs Claude Code and Codex side by side, with 
 duet.sh             Launcher — subcommand dispatch, run registry, tmux layout, tool launches
 router.mjs          Router — command parsing, relay dispatch, watch/converse modes
 bind-sessions.sh    Background binding reconciler — discovers session files, writes manifest
+lib/
+  codex-home.sh               Sourceable helper: CODEX_HOME overlay setup (used by duet.sh, tested directly)
 src/
   transport/tmux-client.mjs     Async tmux transport with per-pane write queues
   relay/session-reader.mjs      Incremental JSONL session reader, response extraction
   runtime/bindings-store.mjs    Binding manifest loader (STATE_DIR, loadBindings)
   runtime/run-store.mjs         Run manifest updates (updateRunJson, setRunDir)
+  model/manifests.mjs           Runtime manifest schemas (RunManifest, BindingsManifest) with zod
+  model/manifests.ts            TypeScript type layer over manifests.mjs
   debug/debug-report.mjs        Debug snapshot collection and rendering
-test/               Test suite (267 tests, 53 suites) — run with: node --test
+test/               Test suite (292 tests, 56 suites) — run with: node --test
 test-support/       Shared test helpers, fake agents, e2e harness
 DUET.md             System prompt injected into both tools at launch
 README.md           User-facing documentation

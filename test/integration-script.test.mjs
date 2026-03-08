@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execSync } from 'child_process';
-import { writeFileSync, mkdirSync, rmSync, readFileSync } from 'fs';
+import { writeFileSync, mkdirSync, rmSync, readFileSync, existsSync, lstatSync, readdirSync, realpathSync } from 'fs';
 import { join } from 'path';
 
 // ─── Resume: durable state directory structure ───────────────────────────────
@@ -536,5 +536,116 @@ describe('workspace path canonicalization', () => {
     assert.equal(relative, realDir, 'pwd -P should resolve relative path');
 
     rmSync(testDir, { recursive: true, force: true });
+  });
+});
+
+// ─── CODEX_HOME isolation: setup_codex_home() behavioral tests ───────────────
+
+describe('setup_codex_home isolation', () => {
+  const testDir = '/tmp/duet-test-codexhome-' + process.pid;
+  const fakeHome = join(testDir, 'fakehome');
+  const fakeCodexDir = join(fakeHome, '.codex');
+  const codexHome = join(testDir, 'codex-home');
+
+  before(() => {
+    mkdirSync(fakeCodexDir, { recursive: true });
+    // Create read-only config files
+    writeFileSync(join(fakeCodexDir, 'auth.json'), '{"token":"test"}');
+    writeFileSync(join(fakeCodexDir, 'config.toml'), 'model = "o4-mini"');
+    writeFileSync(join(fakeCodexDir, 'version.json'), '{"version":"1.0"}');
+    // Create read-only directories
+    mkdirSync(join(fakeCodexDir, 'rules'), { recursive: true });
+    writeFileSync(join(fakeCodexDir, 'rules', 'rule1.md'), '# rule');
+    mkdirSync(join(fakeCodexDir, 'skills'), { recursive: true });
+    writeFileSync(join(fakeCodexDir, 'skills', 'skill1.md'), '# skill');
+    // Create mutable state that must NOT be shared
+    mkdirSync(join(fakeCodexDir, 'sessions'), { recursive: true });
+    writeFileSync(join(fakeCodexDir, 'sessions', 'old.jsonl'), '{}');
+    writeFileSync(join(fakeCodexDir, 'state_5.sqlite'), 'fake-db');
+    writeFileSync(join(fakeCodexDir, 'state_5.sqlite-shm'), 'fake-shm');
+    writeFileSync(join(fakeCodexDir, 'state_5.sqlite-wal'), 'fake-wal');
+    writeFileSync(join(fakeCodexDir, 'history.jsonl'), '{}');
+    writeFileSync(join(fakeCodexDir, 'models_cache.json'), '{}');
+    mkdirSync(join(fakeCodexDir, 'shell_snapshots'), { recursive: true });
+    mkdirSync(join(fakeCodexDir, 'log'), { recursive: true });
+    mkdirSync(join(fakeCodexDir, 'tmp'), { recursive: true });
+  });
+
+  after(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  function runSetup() {
+    execSync(`bash -c '
+      HOME="${fakeHome}"
+      source /home/claude/duet/lib/codex-home.sh
+      setup_codex_home "${codexHome}"
+    '`);
+  }
+
+  it('creates sessions/ subdirectory', () => {
+    runSetup();
+    assert.ok(existsSync(join(codexHome, 'sessions')), 'sessions/ should exist');
+    assert.ok(lstatSync(join(codexHome, 'sessions')).isDirectory(),
+      'sessions/ should be a real directory (not a symlink)');
+  });
+
+  it('symlinks read-only config files from ~/.codex/', () => {
+    for (const f of ['auth.json', 'config.toml', 'version.json']) {
+      const target = join(codexHome, f);
+      assert.ok(existsSync(target), `${f} should exist`);
+      assert.ok(lstatSync(target).isSymbolicLink(), `${f} should be a symlink`);
+      assert.equal(realpathSync(target), join(fakeCodexDir, f),
+        `${f} should point to ~/.codex/${f}`);
+    }
+  });
+
+  it('symlinks read-only directories from ~/.codex/', () => {
+    for (const d of ['rules', 'skills']) {
+      const target = join(codexHome, d);
+      assert.ok(existsSync(target), `${d} should exist`);
+      assert.ok(lstatSync(target).isSymbolicLink(), `${d} should be a symlink`);
+      assert.equal(realpathSync(target), join(fakeCodexDir, d),
+        `${d} should point to ~/.codex/${d}`);
+    }
+  });
+
+  it('does NOT share mutable state files', () => {
+    const mutableFiles = [
+      'state_5.sqlite', 'state_5.sqlite-shm', 'state_5.sqlite-wal',
+      'history.jsonl', 'models_cache.json',
+    ];
+    for (const f of mutableFiles) {
+      const target = join(codexHome, f);
+      assert.ok(!existsSync(target), `${f} must NOT be present in CODEX_HOME`);
+    }
+  });
+
+  it('does NOT share mutable state directories', () => {
+    const mutableDirs = ['shell_snapshots', 'log', 'tmp'];
+    for (const d of mutableDirs) {
+      const target = join(codexHome, d);
+      // sessions/ is created fresh (not symlinked), so we check for symlink specifically
+      if (existsSync(target)) {
+        assert.ok(!lstatSync(target).isSymbolicLink(),
+          `${d} must NOT be a symlink to ~/.codex/${d}`);
+      }
+    }
+  });
+
+  it('sessions/ is an empty directory (not shared with ~/.codex/sessions/)', () => {
+    const sessDir = join(codexHome, 'sessions');
+    assert.ok(!lstatSync(sessDir).isSymbolicLink(),
+      'sessions/ must NOT be a symlink');
+    const contents = readdirSync(sessDir);
+    assert.equal(contents.length, 0,
+      'sessions/ should be empty (not contain old session files)');
+  });
+
+  it('is idempotent — running twice does not error', () => {
+    assert.doesNotThrow(() => runSetup(),
+      'running setup_codex_home twice should not throw');
+    assert.ok(existsSync(join(codexHome, 'sessions')));
+    assert.ok(existsSync(join(codexHome, 'auth.json')));
   });
 });
