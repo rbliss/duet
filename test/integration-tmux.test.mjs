@@ -16,7 +16,7 @@ describe('tmux integration', () => {
   before(() => {
     cleanupTmuxSession(TEST_SESSION);
     paneA = tmux(`new-session -d -s ${TEST_SESSION} -x 120 -y 40 -P -F '#{pane_id}'`);
-    paneB = tmux(`split-window -h -t '${paneA}' -l 59 -P -F '#{pane_id}'`);
+    paneB = tmux(`split-window -h -t '${paneA}' -l 60 -P -F '#{pane_id}'`);
     execSync('sleep 0.5');
   });
 
@@ -215,7 +215,7 @@ describe('duet.sh launcher', () => {
   it('creates correct 3-pane layout', () => {
     const p0 = tmux(`new-session -d -s ${LAUNCH_SESSION} -x 120 -y 40 -P -F '#{pane_id}'`);
     const p1 = tmux(`split-window -v -t '${p0}' -l 12 -P -F '#{pane_id}'`);
-    const p2 = tmux(`split-window -h -t '${p0}' -l 59 -P -F '#{pane_id}'`);
+    const p2 = tmux(`split-window -h -t '${p0}' -l 60 -P -F '#{pane_id}'`);
 
     const paneList = tmux(`list-panes -t ${LAUNCH_SESSION} -F '#{pane_id}'`);
     const paneIds = paneList.split('\n').filter(Boolean);
@@ -248,6 +248,27 @@ describe('duet.sh launcher', () => {
       `Bottom pane (${bottomWidth}) should be wider than top panes (${topWidths})`);
   });
 
+  it('codex pane is not narrower than claude pane', () => {
+    const layout = tmux(`list-panes -t ${LAUNCH_SESSION} -F '#{pane_top} #{pane_left} #{pane_width}'`);
+    const panes = layout.split('\n').filter(Boolean).map(line => {
+      const [top, left, width] = line.split(' ').map(Number);
+      return { top, left, width };
+    });
+    // Top row panes (same top offset, two panes side by side)
+    const topRow = panes.filter(p => p.top === panes[0].top);
+    assert.equal(topRow.length, 2, 'Top row should have 2 panes');
+
+    // Sort by left offset: first = Claude (left), second = Codex (right)
+    topRow.sort((a, b) => a.left - b.left);
+    const claudeWidth = topRow[0].width;
+    const codexWidth = topRow[1].width;
+
+    assert.ok(Math.abs(claudeWidth - codexWidth) <= 1,
+      `Top panes should differ by at most 1 column (claude=${claudeWidth}, codex=${codexWidth})`);
+    assert.ok(codexWidth >= claudeWidth,
+      `Codex (${codexWidth}) should not be narrower than Claude (${claudeWidth})`);
+  });
+
   it('tmux options can be applied to session', () => {
     assert.doesNotThrow(() => {
       tmux(`set -t ${LAUNCH_SESSION} mouse on`);
@@ -269,7 +290,7 @@ describe('cross-process paste safety', { timeout: 30000 }, () => {
   before(() => {
     try { tmux(`kill-session -t ${XPROC_SESSION}`); } catch {}
     xpaneA = tmux(`new-session -d -s ${XPROC_SESSION} -x 120 -y 40 -P -F '#{pane_id}'`);
-    xpaneB = tmux(`split-window -h -t '${xpaneA}' -l 59 -P -F '#{pane_id}'`);
+    xpaneB = tmux(`split-window -h -t '${xpaneA}' -l 60 -P -F '#{pane_id}'`);
     execSync('sleep 0.5');
   });
 

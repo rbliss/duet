@@ -47,7 +47,7 @@ export function createTmuxLayout(tmux: TmuxRunner, session: string): TmuxLayout 
 
   const { cols, lines } = getTermSize();
   const routerHeight = Math.floor(lines * 30 / 100);
-  const codexWidth = Math.floor((cols - 1) / 2);
+  const codexWidth = Math.ceil((cols - 1) / 2);
 
   const claudePane = tmux('new-session', '-d', '-s', session,
     '-x', String(cols), '-y', String(lines),
