@@ -75,4 +75,27 @@ describe('e2e: headless duet with fake agents', { timeout: 60000 }, () => {
 
     await h.sendToRouter('/stop');
   });
+
+  it('watch mode: auto-relays @claude mention from codex to claude (new JSONL formats)', async () => {
+    await h.sendToRouter('/watch');
+    await e2eSleep(1000);
+
+    // MENTION_CLAUDE triggers fake-codex to respond using Codex CLI ≥0.105 formats:
+    //   event_msg/agent_message + response_item (not just task_complete)
+    // task_complete gets a generic message without @claude, so the router must
+    // parse the new formats to detect the mention.
+    const token = `MENTION_CLAUDE_${Date.now()}`;
+    await h.sendToRouter(`@codex ${token}`);
+
+    await e2eWaitFor(() => {
+      const inbox = h.readInbox('claude');
+      return inbox.includes(token);
+    }, 20000);
+
+    const claudeInbox = h.readInbox('claude');
+    assert.ok(claudeInbox.includes(token),
+      'claude should receive auto-relayed message from codex (new JSONL format)');
+
+    await h.sendToRouter('/stop');
+  });
 });

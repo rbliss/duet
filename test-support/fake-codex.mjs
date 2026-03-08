@@ -72,6 +72,33 @@ function writeResponse(text) {
   }) + '\n');
 }
 
+// Write response using Codex CLI ≥0.105 formats:
+//   - event_msg with payload.type 'agent_message' (string in payload.message)
+//   - response_item with assistant content blocks (output_text)
+//   - task_complete WITHOUT last_agent_message (marks completion for fast debounce
+//     but cannot overwrite lastResponse, ensuring the test proves the new parser)
+function writeResponseNewFormat(text) {
+  // 1. event_msg agent_message (Codex CLI ≥0.105)
+  appendFileSync(sessionLog, JSON.stringify({
+    type: 'event_msg',
+    payload: { type: 'agent_message', message: text },
+  }) + '\n');
+  // 2. response_item with assistant content blocks
+  appendFileSync(sessionLog, JSON.stringify({
+    type: 'response_item',
+    payload: {
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'output_text', text }],
+    },
+  }) + '\n');
+  // 3. task_complete without last_agent_message — signals completion to isResponseComplete()
+  //    but extractCodexResponse returns null (no text to extract), so lastResponse is preserved
+  appendFileSync(sessionLog, JSON.stringify({
+    payload: { type: 'task_complete' },
+  }) + '\n');
+}
+
 // Delayed binding: wait before creating session log
 const bindDelay = parseInt(process.env.FAKE_CODEX_BIND_DELAY_MS || '0', 10);
 if (bindDelay > 0) {
@@ -89,6 +116,14 @@ rl.on('line', (line) => {
 
   // Log received input
   appendFileSync(inboxLog, `${new Date().toISOString()} ${trimmed}\n`);
+
+  // Mention @claude mode: use new Codex CLI ≥0.105 JSONL formats
+  if (trimmed.includes('MENTION_CLAUDE')) {
+    const responseText = `I think @claude should look at this. Input was: ${trimmed}`;
+    writeResponseNewFormat(responseText);
+    console.log(responseText);
+    return;
+  }
 
   const responseText = `Codex ACK: ${trimmed}`;
   writeResponse(responseText);

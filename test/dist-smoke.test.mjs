@@ -204,4 +204,24 @@ describe('dist: headless launch', { timeout: 60000 }, () => {
     assert.ok(h.readInbox('claude').includes(token),
       'claude should receive message via dist router');
   });
+
+  it('watch mode: codex→claude relay works via dist (new JSONL formats)', async () => {
+    const { e2eSleep } = await import('../test-support/e2e-harness.mjs');
+    await h.sendToRouter('/watch');
+    await e2eSleep(1000);
+
+    // MENTION_CLAUDE triggers fake-codex's new-format response path
+    const token = `DIST_MENTION_CLAUDE_${Date.now()}`;
+    await h.sendToRouter(`@codex ${token}`);
+
+    await e2eWaitFor(() => {
+      const inbox = h.readInbox('claude');
+      return inbox.includes(token);
+    }, 20000);
+
+    assert.ok(h.readInbox('claude').includes(token),
+      'claude should receive codex→claude relay via dist router (new JSONL format)');
+
+    await h.sendToRouter('/stop');
+  });
 });
