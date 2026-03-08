@@ -71,6 +71,35 @@ describe('extractCodexResponse', () => {
     ] } };
     assert.equal(extractCodexResponse(obj), null);
   });
+
+  it('extracts from event_msg agent_message (Codex CLI ≥0.105)', () => {
+    const obj = { type: 'event_msg', payload: { type: 'agent_message', message: '@claude\n\n## Task: gap scan\n\nHere is the analysis.' } };
+    const result = extractCodexResponse(obj);
+    assert.ok(result.includes('@claude'));
+    assert.ok(result.includes('gap scan'));
+  });
+
+  it('extracts from response_item assistant message', () => {
+    const obj = { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [
+      { type: 'output_text', text: '@claude here is the result' },
+    ] } };
+    assert.equal(extractCodexResponse(obj), '@claude here is the result');
+  });
+
+  it('response_item with multiple content blocks', () => {
+    const obj = { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [
+      { type: 'output_text', text: 'Part 1 @claude' },
+      { type: 'output_text', text: 'Part 2' },
+    ] } };
+    assert.equal(extractCodexResponse(obj), 'Part 1 @claude\nPart 2');
+  });
+
+  it('returns null for response_item user message', () => {
+    const obj = { type: 'response_item', payload: { type: 'message', role: 'user', content: [
+      { type: 'input_text', text: 'hi' },
+    ] } };
+    assert.equal(extractCodexResponse(obj), null);
+  });
 });
 
 // ─── Unit Tests: isResponseComplete ──────────────────────────────────────────

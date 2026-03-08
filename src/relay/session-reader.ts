@@ -92,7 +92,12 @@ export function extractCodexResponse(obj: Record<string, unknown>): string | nul
   if (payload?.type === 'task_complete' && payload.last_agent_message) {
     return payload.last_agent_message as string;
   }
-  if (obj.type === 'event_msg' && payload?.type === 'message' && payload.role === 'assistant') {
+  // event_msg with agent_message (Codex CLI ≥0.105)
+  if (obj.type === 'event_msg' && payload?.type === 'agent_message' && typeof payload.message === 'string') {
+    return payload.message;
+  }
+  // response_item or event_msg with assistant message content blocks
+  if ((obj.type === 'response_item' || obj.type === 'event_msg') && payload?.role === 'assistant') {
     const texts: string[] = [];
     for (const block of (payload.content || []) as Array<Record<string, unknown>>) {
       if (block.type === 'output_text' && block.text) texts.push(block.text as string);
