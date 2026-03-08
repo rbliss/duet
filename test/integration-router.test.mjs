@@ -6,6 +6,15 @@ import { join } from 'path';
 
 import { parseInput, sessionState, handleNewOutput, lastAutoRelayTime, downgradeToPane, findRebindCandidate, rebindTool, stopFileWatchers, extractCodexSessionId, watcherFailed, setStateDir, setRunDir, collectDebugSnapshot, renderDebugReport, getRouterState } from '../router.mjs';
 
+// Read all router source files (equivalent to the old monolithic router.mjs)
+function readRouterSource() {
+  return [
+    readFileSync('/home/claude/duet/src/router/commands.mjs', 'utf8'),
+    readFileSync('/home/claude/duet/src/router/state.mjs', 'utf8'),
+    readFileSync('/home/claude/duet/src/router/controller.mjs', 'utf8'),
+  ].join('\n');
+}
+
 // ─── Per-direction relay cooldown ─────────────────────────────────────────────
 
 describe('per-direction relay cooldown', () => {
@@ -67,7 +76,7 @@ describe('stale binding detection', () => {
   });
 
   it('/rebind is the supported repair path for stale bindings', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     assert.ok(src.includes('/rebind'));
     assert.ok(src.includes('rebindTool'));
     assert.ok(src.includes('findRebindCandidate'));
@@ -183,7 +192,7 @@ describe('rebind candidate search', () => {
 
 describe('help text includes /rebind', () => {
   it('router help text mentions /rebind', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     assert.ok(src.includes('/rebind claude|codex'));
     assert.ok(src.includes('Re-discover session'));
   });
@@ -284,38 +293,38 @@ describe('watcher failure visibility', () => {
   });
 
   it('startup reports watcher failure instead of active', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     assert.ok(src.includes('watcherFailed.add(name)'), 'startPolling should track watcher failures');
     assert.ok(src.includes("watcher failed — automation inactive"), 'should report watcher failure');
   });
 
   it('/status shows inactive when watcher failed for bound tool', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const statusBlock = src.slice(src.indexOf("case 'status':"), src.indexOf("case 'status':") + 1200);
     assert.ok(statusBlock.includes('watcherFailed.has(tool)'), '/status must check watcherFailed');
   });
 
   it('/watch shows inactive when watcher failed for bound tool', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const watchBlock = src.slice(src.indexOf("case 'watch':"), src.indexOf("case 'watch':") + 1200);
     assert.ok(watchBlock.includes('watcherFailed.has(tool)'), '/watch must check watcherFailed');
     assert.ok(watchBlock.includes('inactive'), '/watch should show inactive for failed watcher');
   });
 
   it('watcher error handler adds to watcherFailed set', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const errorBlock = src.slice(src.indexOf("on('error'"), src.indexOf("on('error'") + 300);
     assert.ok(errorBlock.includes('watcherFailed.add(tool)'), 'watcher error should add to watcherFailed');
   });
 
   it('rebindTool clears watcherFailed on successful watcher start', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const rebindBlock = src.slice(src.indexOf('export async function rebindTool'), src.indexOf('export async function rebindTool') + 800);
     assert.ok(rebindBlock.includes('watcherFailed.delete(tool)'), 'rebindTool should clear watcherFailed');
   });
 
   it('pollBindings marks tool as watcherFailed when watcher startup fails after late binding', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const pollBlock = src.slice(src.indexOf('function pollBindings()'), src.indexOf('function pollBindings()') + 800);
     assert.ok(pollBlock.includes('pendingTools.delete(name)'), 'should remove from pendingTools on binding resolution');
     assert.ok(pollBlock.includes('watcherFailed.add(name)'), 'should add to watcherFailed when watcher fails');
@@ -330,7 +339,7 @@ describe('watcher failure visibility', () => {
 
 describe('transport delivery failure handling', () => {
   it('direct commands check sendKeys return value', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const claudeBlock = src.slice(src.indexOf("case 'claude':"), src.indexOf("case 'claude':") + 300);
     assert.ok(claudeBlock.includes('await sendKeys') && claudeBlock.includes('Failed to send'), '@claude should check sendKeys result');
     const codexBlock = src.slice(src.indexOf("case 'codex':"), src.indexOf("case 'codex':") + 300);
@@ -338,20 +347,20 @@ describe('transport delivery failure handling', () => {
   });
 
   it('@both checks both sendKeys results', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const bothBlock = src.slice(src.indexOf("case 'both':"), src.indexOf("case 'both':") + 500);
     assert.ok(bothBlock.includes('Promise.all'), '@both should send in parallel');
     assert.ok(bothBlock.includes('Failed to send'), '@both should report failure');
   });
 
   it('@relay checks pasteToPane result', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const relayBlock = src.slice(src.indexOf("case 'relay':"), src.indexOf("case 'relay':") + 800);
     assert.ok(relayBlock.includes('await pasteToPane') && relayBlock.includes('Failed to relay'), '@relay should check delivery');
   });
 
   it('converse does not advance turn on failed delivery', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const converseBlock = src.slice(src.indexOf('Converse mode auto-relay'), src.indexOf('Converse mode auto-relay') + 1200);
     assert.ok(converseBlock.includes('converseState.rounds--'), 'should decrement round on failure');
     assert.ok(converseBlock.includes('turn not advanced'), 'should log turn not advanced');
@@ -360,20 +369,20 @@ describe('transport delivery failure handling', () => {
   });
 
   it('watch-mode cooldown not recorded on failed delivery', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const mentionBlock = src.slice(src.indexOf('@mention detection'), src.indexOf('@mention detection') + 800);
     assert.ok(mentionBlock.includes('if (delivered)'), 'cooldown should be conditional on delivery');
     assert.ok(mentionBlock.includes('delivery to ${other} failed'), 'should log failed auto-relay delivery');
   });
 
   it('/converse sets converseState only after successful opener delivery', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const converseStart = src.slice(src.indexOf("case 'converse':"), src.indexOf("case 'converse':") + 1200);
     assert.ok(converseStart.includes('Failed to deliver opener'), '/converse should check opener delivery');
     const pasteIdx = converseStart.indexOf('await pasteToPane');
-    const stateIdx = converseStart.indexOf("converseState = {");
-    assert.ok(pasteIdx > 0 && stateIdx > 0, 'both pasteToPane and converseState assignment must exist');
-    assert.ok(stateIdx > pasteIdx, `converseState must be set after delivery (paste@${pasteIdx}, state@${stateIdx})`);
+    const stateIdx = converseStart.indexOf('setConverseState({');
+    assert.ok(pasteIdx > 0 && stateIdx > 0, 'both pasteToPane and setConverseState must exist');
+    assert.ok(stateIdx > pasteIdx, `setConverseState must be set after delivery (paste@${pasteIdx}, state@${stateIdx})`);
   });
 });
 
@@ -381,7 +390,7 @@ describe('transport delivery failure handling', () => {
 
 describe('session-only automation', () => {
   it('router no longer uses capture-pane for automation relay', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const lines = src.split('\n');
     const callLines = lines.filter(l => {
       const trimmed = l.trim();
@@ -398,22 +407,18 @@ describe('session-only automation', () => {
   });
 
   it('router no longer uses getNewContent or cleanCapture in automation paths', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     assert.ok(!src.includes('getCleanResponse'), 'getCleanResponse should be removed');
-    const automationBlock = src.slice(
-      src.indexOf('async function handleNewOutput'),
-      src.indexOf('// ─── Input parsing')
-    );
+    const start = src.indexOf('async function handleNewOutput');
+    const automationBlock = src.slice(start, src.indexOf('// ─── Banner', start));
     assert.ok(!automationBlock.includes('getNewContent'), 'getNewContent should not be used in automation');
     assert.ok(!automationBlock.includes('cleanCapture'), 'cleanCapture should not be used in automation');
   });
 
   it('handleNewOutput uses session response, not pane capture', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
-    const handleBlock = src.slice(
-      src.indexOf('async function handleNewOutput'),
-      src.indexOf('// ─── Input parsing')
-    );
+    const src = readRouterSource();
+    const start = src.indexOf('async function handleNewOutput');
+    const handleBlock = src.slice(start, src.indexOf('// ─── Banner', start));
     assert.ok(handleBlock.includes('getSessionResponse'), 'should use getSessionResponse');
     assert.ok(!handleBlock.includes('capturePane'), 'should not use capturePane');
   });
@@ -421,7 +426,7 @@ describe('session-only automation', () => {
 
 describe('explicit binding enforcement', () => {
   it('/converse requires both tools to be bound', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const converseBlock = src.slice(
       src.indexOf("case 'converse':"),
       src.indexOf("case 'converse':") + 800
@@ -431,7 +436,7 @@ describe('explicit binding enforcement', () => {
   });
 
   it('@relay requires source to be bound', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const relayBlock = src.slice(
       src.indexOf("case 'relay':"),
       src.indexOf("case 'relay':") + 600
@@ -441,7 +446,7 @@ describe('explicit binding enforcement', () => {
   });
 
   it('@relay uses getSessionResponse only (no pane fallback)', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const relayBlock = src.slice(
       src.indexOf("case 'relay':"),
       src.indexOf("case 'relay':") + 600
@@ -453,7 +458,7 @@ describe('explicit binding enforcement', () => {
   });
 
   it('@relay errors when no structured response available', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const relayBlock = src.slice(
       src.indexOf("case 'relay':"),
       src.indexOf("case 'relay':") + 600
@@ -465,7 +470,7 @@ describe('explicit binding enforcement', () => {
 
 describe('/watch and /status messaging', () => {
   it('/watch reports per-tool binding status', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const watchBlock = src.slice(
       src.indexOf("case 'watch':"),
       src.indexOf("case 'watch':") + 1200
@@ -477,7 +482,7 @@ describe('/watch and /status messaging', () => {
   });
 
   it('/status shows binding state and automation availability', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const statusBlock = src.slice(
       src.indexOf("case 'status':"),
       src.indexOf("case 'status':") + 1500
@@ -487,7 +492,7 @@ describe('/watch and /status messaging', () => {
   });
 
   it('no stale auto-downgrade remains', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const dgBlock = src.slice(
       src.indexOf('export function downgradeToPane'),
       src.indexOf('export function downgradeToPane') + 300
@@ -499,7 +504,7 @@ describe('/watch and /status messaging', () => {
   });
 
   it('capturePane is only used for diagnostics (/snap and /debug)', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readRouterSource();
     const lines = src.split('\n');
     const usageLines = lines.filter(l =>
       l.includes('capturePane(') && !l.includes('import') && !l.includes('export'));

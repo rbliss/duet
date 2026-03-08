@@ -6,7 +6,7 @@ Duet is a tmux-based console that runs Claude Code and Codex side by side, with 
 
 ```
 duet.sh             Thin compatibility shim — execs node src/cli/duet.mjs
-router.mjs          Router — command parsing, relay dispatch, watch/converse modes
+router.mjs          Thin entry wrapper — re-exports + main(), logic in src/router/
 bind-sessions.sh    Compatibility shim — execs node src/bindings/reconciler.mjs
 lib/
   codex-home.sh               Legacy bash helper (retained for backward compat)
@@ -16,6 +16,9 @@ src/
   launcher/commands.mjs         Launch commands: cmdNew, cmdResume, cmdFork, cmdList, cmdDestroy
   launcher/tmux.mjs             Sync tmux helpers: layout creation, shellQuote, attach
   launcher/codex-home.mjs       CODEX_HOME overlay setup (ported from lib/codex-home.sh)
+  router/commands.mjs           Pure parsing + text utilities (parseInput, getNewContent, etc.)
+  router/state.mjs              Mutable state, file watchers, polling, rebind logic
+  router/controller.mjs         Command handlers, output relay, banner, main entry
   bindings/reconciler.mjs       Binding reconciler (ported from bash+python to JS)
   bindings/reconciler.ts        TypeScript type layer (BindingReconcilerEnv)
   runtime/workspace.mjs         Workspace and run management helpers
@@ -86,9 +89,15 @@ Runs as a background process after launch. Sole authority for session discovery 
 
 Lifecycle states: `pending` → `bound` | `degraded`
 
-### Router (router.mjs)
+### Router (router.mjs → src/router/)
 
-Node.js process providing the interactive command interface. Pure manifest consumer for binding state.
+Node.js process providing the interactive command interface. Pure manifest consumer for binding state. `router.mjs` is a thin entry wrapper with re-exports; all logic lives in three modules:
+
+- **`src/router/commands.mjs`** — Pure parsing and text utilities: `parseInput`, `getNewContent`, `detectMentions`, `cleanCapture`
+- **`src/router/state.mjs`** — Mutable runtime state, file watchers, binding polling, rebind logic, config constants
+- **`src/router/controller.mjs`** — Command handlers (`handleInput`), output relay (`handleNewOutput`), banner, `main()` entry
+
+The state→controller callback (`setNewOutputHandler`) breaks the circular dependency between file watchers (state) and relay logic (controller).
 
 **Key subsystems:**
 
@@ -120,8 +129,10 @@ Node.js process providing the interactive command interface. Pure manifest consu
 - `/detach` — detach tmux client, tools keep running
 - `/destroy` — stop tools, remove all persistent state
 
-**Exported functions** (used by tests):
-- From `router.mjs` (re-exports + router-specific): `shellEscape`, `parseInput`, `sendKeys`, `capturePane`, `pasteToPane`, `focusPane`, `getNewContent`, `detectMentions`, `resolveSessionPath`, `setStateDir`, `setDuetMode`, `setRunDir`, `readIncremental`, `isResponseComplete`, `updateRunJson`, `handleNewOutput`, `lastAutoRelayTime`, `downgradeToPane` (no-op), `findRebindCandidate`, `rebindTool`, `stopFileWatchers`, `getRouterState`, `collectDebugSnapshot`, `renderDebugReport`
+**Exported functions** (used by tests — all re-exported through `router.mjs` for backward compatibility):
+- From `src/router/commands.mjs`: `parseInput`, `getNewContent`, `detectMentions`, `cleanCapture`
+- From `src/router/state.mjs`: `lastAutoRelayTime`, `watcherFailed`, `isWatching`, `downgradeToPane` (no-op), `findRebindCandidate`, `rebindTool`, `stopFileWatchers`, `getRouterState`
+- From `src/router/controller.mjs`: `handleNewOutput`
 - From `src/transport/tmux-client.mjs`: `shellEscape`, `sendKeys`, `capturePane`, `pasteToPane`, `focusPane`, `killSession`, `detachClient`, `displayMessage`
 - From `src/relay/session-reader.mjs`: `sessionState`, `resolveSessionPath`, `readIncremental`, `extractClaudeResponse`, `extractCodexResponse`, `isResponseComplete`, `getLastResponse`, `setDuetMode`
 - From `src/runtime/bindings-store.mjs`: `STATE_DIR`, `setStateDir`, `loadBindings`

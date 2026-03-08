@@ -362,7 +362,7 @@ describe('build_tool_prompt integration', () => {
 
 describe('/destroy ordering', () => {
   it('router.mjs removes run dir before killing tmux session', () => {
-    const src = readFileSync('/home/claude/duet/router.mjs', 'utf8');
+    const src = readFileSync('/home/claude/duet/src/router/controller.mjs', 'utf8');
     const destroyBlock = src.slice(src.indexOf("case 'destroy':"), src.indexOf("case 'destroy':") + 600);
     const rmIndex = destroyBlock.indexOf('rmSync');
     const killIndex = destroyBlock.indexOf('killSession');
