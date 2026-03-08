@@ -1,3 +1,7 @@
+/**
+ * @typedef {import('../types/runtime.js').DebugSnapshotInput} DebugSnapshotInput
+ */
+
 import { readFileSync, statSync } from 'fs';
 
 // Truncation limits
@@ -7,11 +11,21 @@ const LOG_TAIL_LINES = 5;
 const LOG_TAIL_FULL_LINES = 20;
 const PANE_CAPTURE_LINES = 30;
 
+/**
+ * @param {string | null | undefined} str
+ * @param {number} maxLen
+ * @returns {string | null}
+ */
 function truncate(str, maxLen) {
   if (!str || str.length <= maxLen) return str || null;
   return str.slice(0, maxLen) + `… [${str.length - maxLen} more chars]`;
 }
 
+/**
+ * @param {string} filePath
+ * @param {number} n
+ * @returns {{ lines: string[], totalLines: number } | null}
+ */
 function tailLines(filePath, n) {
   try {
     const content = readFileSync(filePath, 'utf8');
@@ -23,6 +37,10 @@ function tailLines(filePath, n) {
   }
 }
 
+/**
+ * @param {string} filePath
+ * @returns {number | null}
+ */
 function fileSize(filePath) {
   try {
     return statSync(filePath).size;
@@ -31,7 +49,11 @@ function fileSize(filePath) {
   }
 }
 
-// Normalize relayMode to user-facing binding status
+/**
+ * Normalize relayMode to user-facing binding status.
+ * @param {string} relayMode
+ * @returns {string}
+ */
 function normalizeBindingStatus(relayMode) {
   if (relayMode === 'session') return 'bound';
   if (relayMode === 'pending') return 'pending';
@@ -40,55 +62,51 @@ function normalizeBindingStatus(relayMode) {
 
 /**
  * Collect a debug snapshot from the current Duet session state.
- *
- * @param {Object} params
- * @param {Object} params.sessionState - Per-tool session state from session-reader
- * @param {Object} params.routerState - Router-level state (watching, converse, pending, etc.)
- * @param {Object|null} params.bindings - Current bindings.json content
- * @param {Object|null} params.runJson - Current run.json content
- * @param {Object|null} params.paneCaptures - { claude: string, codex: string } (full mode only)
- * @param {boolean} params.full - Include extended output
+ * @param {DebugSnapshotInput} params
+ * @returns {Record<string, unknown>}
  */
 export function collectDebugSnapshot({ sessionState, routerState, bindings, runJson, paneCaptures, full = false }) {
   const previewLen = full ? RESPONSE_PREVIEW_FULL_LEN : RESPONSE_PREVIEW_LEN;
   const tailN = full ? LOG_TAIL_FULL_LINES : LOG_TAIL_LINES;
 
+  /** @type {Record<string, unknown>} */
   const tools = {};
   for (const tool of ['claude', 'codex']) {
-    const st = sessionState[tool];
-    const logTail = st.path ? tailLines(st.path, tailN) : null;
+    const st = /** @type {Record<string, unknown>} */ (sessionState[tool]);
+    const stPath = /** @type {string | null} */ (st.path);
+    const logTail = stPath ? tailLines(stPath, tailN) : null;
 
     // Cross-file binding comparison
-    const bindingsEntry = bindings?.[tool] || null;
-    const runEntry = runJson?.[tool] || null;
+    const bindingsEntry = bindings ? /** @type {Record<string, unknown> | null} */ (/** @type {unknown} */ (bindings[/** @type {'claude' | 'codex'} */ (tool)])) : null;
+    const runEntry = runJson ? /** @type {Record<string, unknown> | null} */ (runJson[tool]) : null;
 
     tools[tool] = {
       // Normalized user-facing status
-      bindingStatus: normalizeBindingStatus(st.relayMode),
+      bindingStatus: normalizeBindingStatus(/** @type {string} */ (st.relayMode)),
       // Raw relayMode for implementation detail
       relayMode: st.relayMode,
       bindingLevel: st.bindingLevel,
       // Live router/session state
-      livePath: st.path,
-      watcherActive: routerState.fileWatcherActive[tool] || false,
+      livePath: stPath,
+      watcherActive: routerState.fileWatcherActive[/** @type {'claude' | 'codex'} */ (tool)] || false,
       watcherFailed: routerState.watcherFailed.includes(tool),
       pending: routerState.pendingTools.includes(tool),
       offset: st.offset,
-      fileSize: st.path ? fileSize(st.path) : null,
+      fileSize: stPath ? fileSize(stPath) : null,
       lastSessionActivityAt: st.lastSessionActivityAt || null,
-      lastResponsePreview: truncate(st.lastResponse, previewLen),
+      lastResponsePreview: truncate(/** @type {string | null} */ (st.lastResponse), previewLen),
       sessionLogTail: logTail,
       // bindings.json state
       manifest: bindingsEntry ? {
-        status: bindingsEntry.status || null,
-        level: bindingsEntry.level || null,
-        path: bindingsEntry.path || null,
-        session_id: bindingsEntry.session_id || null,
+        status: /** @type {unknown} */ (bindingsEntry.status) || null,
+        level: /** @type {unknown} */ (bindingsEntry.level) || null,
+        path: /** @type {unknown} */ (bindingsEntry.path) || null,
+        session_id: /** @type {unknown} */ (bindingsEntry.session_id) || null,
       } : null,
       // run.json state
       runJson: runEntry ? {
-        session_id: runEntry.session_id || null,
-        binding_path: runEntry.binding_path || null,
+        session_id: /** @type {unknown} */ (runEntry.session_id) || null,
+        binding_path: /** @type {unknown} */ (runEntry.binding_path) || null,
       } : null,
     };
   }
@@ -123,8 +141,11 @@ export function collectDebugSnapshot({ sessionState, routerState, bindings, runJ
 
 /**
  * Render a debug snapshot into a human-readable report string.
+ * @param {Record<string, unknown>} snapshot
+ * @returns {string}
  */
 export function renderDebugReport(snapshot) {
+  /** @type {string[]} */
   const lines = [];
   const hr = '─'.repeat(50);
 
@@ -138,36 +159,41 @@ export function renderDebugReport(snapshot) {
   lines.push(`Mode: ${mode}  Session: ${session}`);
 
   // Run info
-  if (snapshot.run) {
-    const r = snapshot.run;
-    lines.push(`Run: ${r.run_id || '?'}  Status: ${r.status || '?'}`);
-    lines.push(`CWD: ${r.cwd || '?'}`);
-    if (r.tmux_session) lines.push(`Tmux: ${r.tmux_session}`);
+  const run = /** @type {Record<string, unknown> | null} */ (snapshot.run);
+  if (run) {
+    lines.push(`Run: ${run.run_id || '?'}  Status: ${run.status || '?'}`);
+    lines.push(`CWD: ${run.cwd || '?'}`);
+    if (run.tmux_session) lines.push(`Tmux: ${run.tmux_session}`);
   } else {
     lines.push('Run: (no run.json)');
   }
 
   // Router state
+  const router = /** @type {Record<string, unknown>} */ (snapshot.router);
+  const converse = /** @type {Record<string, unknown> | null} */ (router.converse);
   lines.push('');
-  const routerStatus = snapshot.router.converseActive
-    ? `converse "${snapshot.router.converse.topic}" round ${snapshot.router.converse.round}/${snapshot.router.converse.maxRounds} (${snapshot.router.converse.turn}'s turn)`
-    : snapshot.router.watching ? 'watching' : 'idle';
+  const routerStatus = router.converseActive
+    ? `converse "${converse?.topic}" round ${converse?.round}/${converse?.maxRounds} (${converse?.turn}'s turn)`
+    : router.watching ? 'watching' : 'idle';
   lines.push(`Router: ${routerStatus}`);
-  if (snapshot.router.pendingTools.length > 0) {
-    lines.push(`Pending: ${snapshot.router.pendingTools.join(', ')}`);
+  const pendingTools = /** @type {string[]} */ (router.pendingTools);
+  if (pendingTools.length > 0) {
+    lines.push(`Pending: ${pendingTools.join(', ')}`);
   }
-  if (snapshot.router.watcherFailed.length > 0) {
-    lines.push(`Watcher failed: ${snapshot.router.watcherFailed.join(', ')}`);
+  const watcherFailed = /** @type {string[]} */ (router.watcherFailed);
+  if (watcherFailed.length > 0) {
+    lines.push(`Watcher failed: ${watcherFailed.join(', ')}`);
   }
 
   // Per-tool cross-file binding comparison + live state
+  const tools = /** @type {Record<string, Record<string, unknown>>} */ (snapshot.tools);
   for (const tool of ['claude', 'codex']) {
-    const t = snapshot.tools[tool];
+    const t = tools[tool];
     lines.push('');
     lines.push(`[${tool}]`);
 
     // Binding status (normalized)
-    let statusLabel = t.bindingStatus;
+    let statusLabel = /** @type {string} */ (t.bindingStatus);
     if (t.bindingStatus === 'bound' && t.watcherFailed) {
       statusLabel = 'bound (watcher FAILED — automation inactive)';
     } else if (t.bindingStatus === 'bound' && t.watcherActive) {
@@ -176,19 +202,21 @@ export function renderDebugReport(snapshot) {
     lines.push(`  status: ${statusLabel}${t.bindingLevel ? ` [${t.bindingLevel}]` : ''}`);
 
     // Cross-file comparison: run.json
-    if (t.runJson) {
-      lines.push(`  run.json    session_id: ${t.runJson.session_id || '—'}`);
-      lines.push(`              binding_path: ${t.runJson.binding_path || '—'}`);
+    const tRunJson = /** @type {Record<string, unknown> | null} */ (t.runJson);
+    if (tRunJson) {
+      lines.push(`  run.json    session_id: ${tRunJson.session_id || '—'}`);
+      lines.push(`              binding_path: ${tRunJson.binding_path || '—'}`);
     } else {
       lines.push(`  run.json    (no entry)`);
     }
 
     // Cross-file comparison: bindings.json
-    if (t.manifest) {
-      lines.push(`  bindings    status: ${t.manifest.status || '—'}  level: ${t.manifest.level || '—'}`);
-      lines.push(`              path: ${t.manifest.path || '—'}`);
-      if (t.manifest.session_id) {
-        lines.push(`              session_id: ${t.manifest.session_id}`);
+    const manifest = /** @type {Record<string, unknown> | null} */ (t.manifest);
+    if (manifest) {
+      lines.push(`  bindings    status: ${manifest.status || '—'}  level: ${manifest.level || '—'}`);
+      lines.push(`              path: ${manifest.path || '—'}`);
+      if (manifest.session_id) {
+        lines.push(`              session_id: ${manifest.session_id}`);
       }
     } else {
       lines.push(`  bindings    (no manifest)`);
@@ -200,15 +228,16 @@ export function renderDebugReport(snapshot) {
       lines.push(`              offset: ${t.offset}  file size: ${t.fileSize ?? '?'}`);
     }
     if (t.lastSessionActivityAt) {
-      const ago = Math.round((Date.now() - t.lastSessionActivityAt) / 1000);
+      const ago = Math.round((Date.now() - /** @type {number} */ (t.lastSessionActivityAt)) / 1000);
       lines.push(`              last activity: ${ago}s ago`);
     }
     if (t.lastResponsePreview) {
       lines.push(`  last response: ${t.lastResponsePreview}`);
     }
-    if (t.sessionLogTail) {
-      lines.push(`  session log (last ${t.sessionLogTail.lines.length} of ${t.sessionLogTail.totalLines} lines):`);
-      for (const l of t.sessionLogTail.lines) {
+    const sessionLogTail = /** @type {{ lines: string[], totalLines: number } | null} */ (t.sessionLogTail);
+    if (sessionLogTail) {
+      lines.push(`  session log (last ${sessionLogTail.lines.length} of ${sessionLogTail.totalLines} lines):`);
+      for (const l of sessionLogTail.lines) {
         const display = l.length > 120 ? l.slice(0, 120) + '…' : l;
         lines.push(`    ${display}`);
       }
@@ -216,12 +245,13 @@ export function renderDebugReport(snapshot) {
   }
 
   // Pane captures (full mode only)
-  if (snapshot.paneCaptures) {
+  const paneCaptures = /** @type {Record<string, string | null> | null} */ (snapshot.paneCaptures);
+  if (paneCaptures) {
     for (const tool of ['claude', 'codex']) {
-      if (snapshot.paneCaptures[tool]) {
+      if (paneCaptures[tool]) {
         lines.push('');
         lines.push(`[${tool} pane capture]`);
-        const capLines = snapshot.paneCaptures[tool].trimEnd().split('\n');
+        const capLines = /** @type {string} */ (paneCaptures[tool]).trimEnd().split('\n');
         for (const l of capLines.slice(-PANE_CAPTURE_LINES)) {
           lines.push(`  ${l}`);
         }

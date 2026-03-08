@@ -27,7 +27,7 @@ import {
   destroyRun,
 } from '../runtime/workspace.mjs';
 
-const DUET_BASE = process.env.DUET_BASE || `${process.env.HOME}/.local/state/duet`;
+const DUET_BASE = process.env.DUET_BASE || `${process.env.HOME || ''}/.local/state/duet`;
 const RUNS_DIR = `${DUET_BASE}/runs`;
 const WORKSPACES_DIR = `${DUET_BASE}/workspaces`;
 
@@ -50,6 +50,7 @@ switch (cmd) {
 
   case 'write-run-json': {
     const path = args[0];
+    /** @type {Record<string, string>} */
     const kvPairs = {};
     for (let i = 1; i < args.length; i += 2) {
       kvPairs[args[i]] = args[i + 1] || '';
@@ -60,6 +61,7 @@ switch (cmd) {
 
   case 'read-fields': {
     const path = args[0];
+    /** @type {Record<string, string>} */
     const result = {};
     for (let i = 1; i < args.length; i++) {
       result[args[i]] = readRunField(path, args[i]);
@@ -102,7 +104,7 @@ switch (cmd) {
       process.stderr.write('Error: no run found to destroy\n');
       process.exit(1);
     }
-    destroyRun(resolved.runId, RUNS_DIR, WORKSPACES_DIR, process.env.DUET_TMUX_SOCKET || null);
+    destroyRun(resolved.runId, RUNS_DIR, WORKSPACES_DIR, process.env.DUET_TMUX_SOCKET);
     process.stdout.write(`Destroyed run ${resolved.runId.slice(0, 8)}\n`);
     break;
   }

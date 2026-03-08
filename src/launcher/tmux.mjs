@@ -1,13 +1,20 @@
 /**
  * Synchronous tmux helpers for the launcher.
  * These are one-time setup calls, not hot-path — execFileSync is fine.
+ *
+ * @typedef {import('../types/runtime.js').TmuxRunner} TmuxRunner
+ * @typedef {import('../types/runtime.js').TermSize} TermSize
+ * @typedef {import('../types/runtime.js').TmuxLayout} TmuxLayout
+ * @typedef {import('../types/runtime.js').LaunchRouterOptions} LaunchRouterOptions
  */
 
 import { execFileSync, spawnSync } from 'child_process';
 
 /**
  * Shell-quote a string for safe interpolation into commands typed into tmux panes.
- * Uses POSIX single-quote wrapping: wrap in '' and escape internal ' as '\\''
+ * Uses POSIX single-quote wrapping: wrap in '' and escape internal ' as '\''
+ * @param {string} s
+ * @returns {string}
  */
 export function shellQuote(s) {
   if (s === '') return "''";
@@ -17,9 +24,11 @@ export function shellQuote(s) {
 /**
  * Create a tmux runner that optionally uses a custom socket.
  * Returns a function that calls tmux with the given args and returns stdout.
+ * @param {string | undefined} socket
+ * @returns {TmuxRunner}
  */
 export function createTmuxRunner(socket) {
-  return function tmux(...args) {
+  return function tmux(/** @type {string[]} */ ...args) {
     const fullArgs = socket ? ['-S', socket, ...args] : args;
     return execFileSync('tmux', fullArgs, {
       encoding: 'utf8',
@@ -30,9 +39,10 @@ export function createTmuxRunner(socket) {
 
 /**
  * Get terminal dimensions from env vars, tput, or defaults.
+ * @returns {TermSize}
  */
 export function getTermSize() {
-  let cols = parseInt(process.env.COLUMNS, 10);
+  let cols = parseInt(process.env.COLUMNS || '', 10);
   if (!cols || isNaN(cols)) {
     try {
       cols = parseInt(execFileSync('tput', ['cols'], { encoding: 'utf8' }).trim(), 10);
@@ -40,7 +50,7 @@ export function getTermSize() {
   }
   if (!cols || isNaN(cols)) cols = 120;
 
-  let lines = parseInt(process.env.LINES, 10);
+  let lines = parseInt(process.env.LINES || '', 10);
   if (!lines || isNaN(lines)) {
     try {
       lines = parseInt(execFileSync('tput', ['lines'], { encoding: 'utf8' }).trim(), 10);
@@ -53,7 +63,9 @@ export function getTermSize() {
 
 /**
  * Create the 3-pane tmux layout with styling.
- * Returns { claudePane, codexPane, routerPane }.
+ * @param {TmuxRunner} tmux
+ * @param {string} session
+ * @returns {TmuxLayout}
  */
 export function createTmuxLayout(tmux, session) {
   try { tmux('kill-session', '-t', session); } catch {}
@@ -93,6 +105,9 @@ export function createTmuxLayout(tmux, session) {
 
 /**
  * Launch the router process in the bottom pane.
+ * @param {TmuxRunner} tmux
+ * @param {string} routerPane
+ * @param {LaunchRouterOptions} options
  */
 export function launchRouter(tmux, routerPane, { session, runDir, mode, claudePane, codexPane, duetDir }) {
   const qRunDir = shellQuote(runDir);
@@ -104,6 +119,9 @@ export function launchRouter(tmux, routerPane, { session, runDir, mode, claudePa
 
 /**
  * Check if a tmux session exists.
+ * @param {TmuxRunner} tmux
+ * @param {string} session
+ * @returns {boolean}
  */
 export function tmuxHasSession(tmux, session) {
   try {
@@ -117,6 +135,9 @@ export function tmuxHasSession(tmux, session) {
 /**
  * Attach to a tmux session (blocks until detach).
  * Returns the exit code; callers should propagate failure.
+ * @param {string} session
+ * @param {string | undefined} socket
+ * @returns {number}
  */
 export function tmuxAttach(session, socket) {
   const args = socket

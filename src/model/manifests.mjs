@@ -23,6 +23,10 @@ export const RunManifestSchema = z.object({
   codex_home: z.string().nullable().optional(),
 });
 
+/**
+ * @param {unknown} data
+ * @returns {z.infer<typeof RunManifestSchema>}
+ */
 export function parseRunManifest(data) {
   return RunManifestSchema.parse(data);
 }
@@ -45,6 +49,10 @@ export const BindingsManifestSchema = z.object({
   codex: ToolBindingSchema,
 });
 
+/**
+ * @param {unknown} data
+ * @returns {z.infer<typeof BindingsManifestSchema>}
+ */
 export function parseBindingsManifest(data) {
   return BindingsManifestSchema.parse(data);
 }

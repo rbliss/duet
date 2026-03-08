@@ -1,15 +1,24 @@
 /**
  * Router runtime state: mutable state containers, file watchers,
  * binding polling, and rebind logic.
+ *
+ * @typedef {import('../types/runtime.js').ToolName} ToolName
+ * @typedef {import('../types/runtime.js').ConverseState} ConverseState
+ * @typedef {import('../types/runtime.js').RouterStateSnapshot} RouterStateSnapshot
+ * @typedef {import('../types/runtime.js').NewOutputHandler} NewOutputHandler
+ * @typedef {import('../types/runtime.js').SessionStateMap} SessionStateMap
  */
 
 import { readFileSync, statSync, readdirSync, watch, existsSync } from 'fs';
 import { join } from 'path';
 
 import {
-  sessionState, resolveSessionPath, readIncremental,
+  sessionState as _sessionState, resolveSessionPath, readIncremental,
   isResponseComplete, getLastResponse, extractCodexSessionId,
 } from '../relay/session-reader.mjs';
+
+/** @type {SessionStateMap} */
+const sessionState = _sessionState;
 import { updateRunJson } from '../runtime/run-store.mjs';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
@@ -18,6 +27,7 @@ export const SESSION = process.env.DUET_SESSION || 'duet';
 export const CLAUDE_PANE = process.env.CLAUDE_PANE;
 export const CODEX_PANE = process.env.CODEX_PANE;
 
+/** @type {Record<string, string | undefined>} */
 export const PANES = { claude: CLAUDE_PANE, codex: CODEX_PANE };
 
 export const C = {
@@ -36,35 +46,54 @@ export const RELAY_COOLDOWN_MS = 8000;
 
 // ─── Mutable state ──────────────────────────────────────────────────────────
 
+/** @type {import('readline').Interface | null} */
 let rl = null;
+/** @type {true | null} */
 let watchInterval = null;
+/** @type {Record<string, number>} */
 export const lastAutoRelayTime = {};
+/** @type {ConverseState | null} */
 let converseState = null;
 
+/** @type {Record<string, import('fs').FSWatcher>} */
 const fileWatchers = {};
+/** @type {Record<string, NodeJS.Timeout>} */
 const fileDebounceTimers = {};
 
+/** @type {NodeJS.Timeout | null} */
 let bindingPollTimer = null;
+/** @type {Set<string>} */
 let pendingTools = new Set();
 
 // Track tools whose watcher failed after binding — bound but not watching
+/** @type {Set<string>} */
 export const watcherFailed = new Set();
 
 // Callback for session relay — set by controller to avoid circular deps
+/** @type {NewOutputHandler | null} */
 let newOutputHandler = null;
 
 // ─── Accessors ───────────────────────────────────────────────────────────────
 
+/** @param {import('readline').Interface} readline */
 export function setRl(readline) { rl = readline; }
+/** @returns {boolean} */
 export function isWatching() { return watchInterval !== null; }
 export function prompt() { if (rl) rl.prompt(); }
 
+/** @returns {ConverseState | null} */
 export function getConverseState() { return converseState; }
+/** @param {ConverseState | null} state */
 export function setConverseState(state) { converseState = state; }
 
+/** @param {NewOutputHandler} handler */
 export function setNewOutputHandler(handler) { newOutputHandler = handler; }
 
-// Return binding state summary for user-facing messages
+/**
+ * Return binding state summary for user-facing messages.
+ * @param {ToolName} tool
+ * @returns {string}
+ */
 export function bindingStatus(tool) {
   const st = sessionState[tool];
   if (st.relayMode === 'session') return 'bound';
@@ -72,13 +101,20 @@ export function bindingStatus(tool) {
   return 'degraded';
 }
 
-// Get the latest structured session response for a tool, or null if unavailable
+/**
+ * Get the latest structured session response for a tool, or null if unavailable.
+ * @param {ToolName} tool
+ * @returns {string | null}
+ */
 export function getSessionResponse(tool) {
-  const logResponse = getLastResponse(tool);
+  const logResponse = /** @type {string | null} */ (getLastResponse(tool));
   return (logResponse && logResponse.length > 0) ? logResponse : null;
 }
 
-// Read current run.json for debug snapshots
+/**
+ * Read current run.json for debug snapshots.
+ * @returns {Record<string, unknown> | null}
+ */
 export function readRunJson() {
   const runDir = process.env.DUET_RUN_DIR;
   if (!runDir) return null;
@@ -89,7 +125,10 @@ export function readRunJson() {
   return null;
 }
 
-// Assemble router-internal state for the debug snapshot
+/**
+ * Assemble router-internal state for the debug snapshot.
+ * @returns {RouterStateSnapshot}
+ */
 export function getRouterState() {
   return {
     watching: isWatching(),
@@ -105,15 +144,19 @@ export function getRouterState() {
 
 // ─── File watcher functions (session-bound event-driven relay) ───────────────
 
+/**
+ * @param {string} tool
+ * @returns {boolean}
+ */
 export function startFileWatcher(tool) {
-  const filePath = sessionState[tool].path;
+  const filePath = sessionState[/** @type {ToolName} */ (tool)].path;
   if (!filePath || fileWatchers[tool]) return false;
   try {
     try {
       const { mtimeMs } = statSync(filePath);
-      sessionState[tool].lastSessionActivityAt = Math.max(mtimeMs, Date.now());
+      sessionState[/** @type {ToolName} */ (tool)].lastSessionActivityAt = Math.max(mtimeMs, Date.now());
     } catch {
-      sessionState[tool].lastSessionActivityAt = Date.now();
+      sessionState[/** @type {ToolName} */ (tool)].lastSessionActivityAt = Date.now();
     }
     fileWatchers[tool] = watch(filePath, (eventType) => {
       if (eventType === 'change') onFileChange(tool);
@@ -130,6 +173,9 @@ export function startFileWatcher(tool) {
   }
 }
 
+/**
+ * @param {string} tool
+ */
 function stopFileWatcher(tool) {
   if (fileWatchers[tool]) {
     fileWatchers[tool].close();
@@ -145,20 +191,26 @@ export function stopFileWatchers() {
   for (const tool of Object.keys(fileWatchers)) stopFileWatcher(tool);
 }
 
+/**
+ * @param {string} tool
+ */
 function onFileChange(tool) {
   if (!watchInterval) return;
-  const { hasNew, complete } = readIncremental(tool);
+  const { hasNew, complete } = readIncremental(/** @type {ToolName} */ (tool));
   if (!hasNew) return;
-  sessionState[tool].lastSessionActivityAt = Date.now();
+  sessionState[/** @type {ToolName} */ (tool)].lastSessionActivityAt = Date.now();
   if (fileDebounceTimers[tool]) clearTimeout(fileDebounceTimers[tool]);
   const delay = complete ? SESSION_COMPLETE_MS : SESSION_DEBOUNCE_MS;
   fileDebounceTimers[tool] = setTimeout(() => triggerSessionRelay(tool), delay);
 }
 
+/**
+ * @param {string} tool
+ */
 async function triggerSessionRelay(tool) {
-  const st = sessionState[tool];
+  const st = sessionState[/** @type {ToolName} */ (tool)];
   if (!st.lastResponse) return;
-  if (newOutputHandler) await newOutputHandler(tool, st.lastResponse);
+  if (newOutputHandler) await newOutputHandler(/** @type {ToolName} */ (tool), st.lastResponse);
 }
 
 // ─── Polling start / stop ────────────────────────────────────────────────────
@@ -173,8 +225,8 @@ function scheduleBindingPoll() {
 
 function pollBindings() {
   for (const name of [...pendingTools]) {
-    resolveSessionPath(name);
-    const st = sessionState[name];
+    resolveSessionPath(/** @type {ToolName} */ (name));
+    const st = sessionState[/** @type {ToolName} */ (name)];
     if (st.relayMode === 'session' && st.path) {
       pendingTools.delete(name);
       if (startFileWatcher(name)) {
@@ -197,7 +249,7 @@ export function startPolling() {
   if (watchInterval) return;
   pendingTools = new Set();
   watcherFailed.clear();
-  for (const name of ['claude', 'codex']) {
+  for (const name of /** @type {ToolName[]} */ (['claude', 'codex'])) {
     resolveSessionPath(name);
     const st = sessionState[name];
     if (st.relayMode === 'session' && st.path) {
@@ -227,21 +279,28 @@ export function stopPolling() {
 
 // ─── Rebind ──────────────────────────────────────────────────────────────────
 
-// downgradeToPane is removed — stale binding is a status note, not an automatic fallback.
-// Use /rebind to manually re-discover a session file.
+/**
+ * No-op: retained as export for test backward compat but no longer changes transport.
+ * @param {string} tool
+ * @param {string} reason
+ */
 export function downgradeToPane(tool, reason) {
-  // No-op: retained as export for test backward compat but no longer changes transport.
   console.log(`\n${C.yellow}${tool}: ${reason} — use /rebind ${tool} to re-discover session${C.reset}`);
   prompt();
 }
 
-// Find the best rebind candidate by scanning for recent .jsonl files
+/**
+ * Find the best rebind candidate by scanning for recent .jsonl files.
+ * @param {ToolName} tool
+ * @returns {string | null}
+ */
 export function findRebindCandidate(tool) {
   const st = sessionState[tool];
   if (!st.path) return null;
   const dir = st.path.replace(/\/[^/]+$/, '');
   try {
     const entries = readdirSync(dir);
+    /** @type {string | null} */
     let best = null;
     let bestMtime = 0;
     for (const entry of entries) {
@@ -261,10 +320,15 @@ export function findRebindCandidate(tool) {
   return null;
 }
 
-// Rebind a tool to a new session file
+/**
+ * Rebind a tool to a new session file.
+ * @param {ToolName} tool
+ * @param {string} newPath
+ * @returns {Promise<{oldPath: string | null, newPath: string, newSid: string | null}>}
+ */
 export async function rebindTool(tool, newPath) {
   const st = sessionState[tool];
-  const oldPath = st.path;
+  const oldPath = /** @type {string | null} */ (st.path);
   stopFileWatcher(tool);
 
   st.path = newPath;
@@ -280,6 +344,7 @@ export async function rebindTool(tool, newPath) {
   st.lastSessionActivityAt = Date.now();
 
   // Claude: session ID is the filename UUID. Codex: extract payload.id from first JSONL line.
+  /** @type {string | null} */
   let newSid;
   if (tool === 'codex') {
     newSid = extractCodexSessionId(newPath);
@@ -293,6 +358,7 @@ export async function rebindTool(tool, newPath) {
     watcherFailed.delete(tool);
   }
 
+  /** @type {Record<string, string>} */
   const updates = { [`${tool}.binding_path`]: newPath, updated_at: new Date().toISOString() };
   if (newSid) updates[`${tool}.session_id`] = newSid;
   updateRunJson(updates);

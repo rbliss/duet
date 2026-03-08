@@ -1,10 +1,19 @@
 /**
  * Pure parsing and text utility functions for the router.
  * No mutable state, no side effects.
+ *
+ * @typedef {import('../types/runtime.js').ToolName} ToolName
+ * @typedef {import('../types/runtime.js').ParsedInput} ParsedInput
  */
 
 // ─── Watch & converse helpers ────────────────────────────────────────────────
 
+/**
+ * Extract new content by diffing baseline vs current using prefix/suffix matching.
+ * @param {string} baseline
+ * @param {string} current
+ * @returns {string}
+ */
 export function getNewContent(baseline, current) {
   if (!baseline) return current;
   if (baseline === current) return '';
@@ -27,16 +36,22 @@ export function getNewContent(baseline, current) {
 
   if (prefixLen > 0 || suffixLen > 0) {
     const inserted = currLines.slice(prefixLen, currLines.length - suffixLen);
-    const result = inserted.filter(l => l.trim()).join('\n').trim();
+    const result = inserted.filter(/** @param {string} l */ l => l.trim()).join('\n').trim();
     if (result) return result;
   }
 
-  const baseSet = new Set(baseLines.map(l => l.trim()).filter(Boolean));
-  const newLines = currLines.filter(l => l.trim() && !baseSet.has(l.trim()));
+  const baseSet = new Set(baseLines.map(/** @param {string} l */ l => l.trim()).filter(Boolean));
+  const newLines = currLines.filter(/** @param {string} l */ l => l.trim() && !baseSet.has(l.trim()));
   return newLines.join('\n');
 }
 
+/**
+ * Detect @claude and @codex mentions in text.
+ * @param {string} text
+ * @returns {ToolName[]}
+ */
 export function detectMentions(text) {
+  /** @type {ToolName[]} */
   const mentions = [];
   if (/@claude\b/i.test(text)) mentions.push('claude');
   if (/@codex\b/i.test(text)) mentions.push('codex');
@@ -46,11 +61,16 @@ export function detectMentions(text) {
 const BOX_CHARS = /[─│╭╮╰╯┌┐└┘├┤┬┴┼╔╗╚╝║═▔▁█▓▒░]/g;
 const SPINNER = /^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◑◒◓⣾⣽⣻⢿⡿⣟⣯⣷]\s*/;
 
+/**
+ * Clean captured pane text by removing box-drawing, spinners, and status hints.
+ * @param {string | null | undefined} text
+ * @returns {string}
+ */
 export function cleanCapture(text) {
   if (!text) return '';
   return text
     .split('\n')
-    .filter(line => {
+    .filter(/** @param {string} line */ line => {
       const trimmed = line.trim();
       if (!trimmed) return false;
       const withoutBox = trimmed.replace(BOX_CHARS, '').trim();
@@ -61,7 +81,7 @@ export function cleanCapture(text) {
       if (/^[$>]\s*$/.test(trimmed)) return false;
       return true;
     })
-    .map(line => line.replace(/^[\s│║▏]+/, '').replace(/[\s│║▕]+$/, '').trim())
+    .map(/** @param {string} line */ line => line.replace(/^[\s│║▏]+/, '').replace(/[\s│║▕]+$/, '').trim())
     .filter(Boolean)
     .join('\n')
     .trim();
@@ -69,6 +89,11 @@ export function cleanCapture(text) {
 
 // ─── Input parsing ───────────────────────────────────────────────────────────
 
+/**
+ * Parse router input into a typed command object.
+ * @param {string | null | undefined} input
+ * @returns {ParsedInput}
+ */
 export function parseInput(input) {
   if (!input) return { type: 'empty' };
 

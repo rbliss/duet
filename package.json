@@ -4,13 +4,14 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "node --test"
   },
   "dependencies": {
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@types/node": "^25.3.5",
     "typescript": "^5.7.0"
   }
 }

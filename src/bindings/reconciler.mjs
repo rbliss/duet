@@ -8,6 +8,9 @@
  * Expects environment variables (see BindingReconcilerEnv below).
  * Writes $STATE_DIR/bindings.json as its sole output.
  * Always exits 0 (partial binding is not an error).
+ *
+ * @typedef {import('../types/runtime.js').ReconcilerEnv} ReconcilerEnv
+ * @typedef {import('../types/runtime.js').ReconcilerToolState} ReconcilerToolState
  */
 
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'fs';
@@ -18,6 +21,7 @@ import { join, basename } from 'path';
 /**
  * Parse and validate the reconciler's environment inputs once up front.
  * Returns a frozen object — no scattered process.env reads.
+ * @returns {Readonly<ReconcilerEnv>}
  */
 function parseEnv() {
   const env = process.env;
@@ -28,6 +32,7 @@ function parseEnv() {
   const workdir = env.WORKDIR;
 
   if (!claudeSessionId || !claudeProjects || !codexSessions || !stateDir || !workdir) {
+    /** @type {string[]} */
     const missing = [];
     if (!claudeSessionId) missing.push('CLAUDE_SESSION_ID');
     if (!claudeProjects) missing.push('CLAUDE_PROJECTS');
@@ -53,7 +58,11 @@ function parseEnv() {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Extract Codex session ID from a session file's first line (payload.id). */
+/**
+ * Extract Codex session ID from a session file's first line (payload.id).
+ * @param {string} filePath
+ * @returns {string}
+ */
 function extractCodexSessionId(filePath) {
   try {
     const firstLine = readFileSync(filePath, 'utf8').split('\n')[0];
@@ -64,7 +73,11 @@ function extractCodexSessionId(filePath) {
   }
 }
 
-/** Extract Codex cwd from a session file's first line (payload.cwd). */
+/**
+ * Extract Codex cwd from a session file's first line (payload.cwd).
+ * @param {string} filePath
+ * @returns {string}
+ */
 function extractCodexCwd(filePath) {
   try {
     const firstLine = readFileSync(filePath, 'utf8').split('\n')[0];
@@ -75,8 +88,13 @@ function extractCodexCwd(filePath) {
   }
 }
 
-/** Find files matching a pattern recursively under a directory. */
+/**
+ * Find .jsonl files recursively under a directory.
+ * @param {string} dir
+ * @returns {string[]}
+ */
 function findJsonlFiles(dir) {
+  /** @type {string[]} */
   const results = [];
   try {
     _walkDir(dir, results);
@@ -86,6 +104,10 @@ function findJsonlFiles(dir) {
   return results;
 }
 
+/**
+ * @param {string} dir
+ * @param {string[]} results
+ */
 function _walkDir(dir, results) {
   let entries;
   try {
@@ -103,16 +125,22 @@ function _walkDir(dir, results) {
   }
 }
 
+/** @returns {string} */
 function nowIso() {
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
+/**
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // ─── Manifest state ──────────────────────────────────────────────────────────
 
+/** @returns {{ claude: ReconcilerToolState, codex: ReconcilerToolState }} */
 function createManifestState() {
   return {
     claude: { status: 'pending', path: '', level: '', sessionId: '' },
@@ -120,6 +148,10 @@ function createManifestState() {
   };
 }
 
+/**
+ * @param {{ claude: ReconcilerToolState, codex: ReconcilerToolState }} state
+ * @param {string} stateDir
+ */
 function writeManifest(state, stateDir) {
   const now = nowIso();
   const bindings = {
@@ -143,6 +175,10 @@ function writeManifest(state, stateDir) {
 
 // ─── Main reconciler logic ───────────────────────────────────────────────────
 
+/**
+ * @param {ReconcilerEnv} [envOverride]
+ * @returns {Promise<void>}
+ */
 export async function reconcile(envOverride) {
   const env = envOverride || parseEnv();
   const state = createManifestState();

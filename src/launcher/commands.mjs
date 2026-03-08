@@ -1,6 +1,9 @@
 /**
  * Launcher commands: new, resume, fork, list, destroy.
  * Ported from duet.sh's cmd_new(), cmd_resume(), cmd_fork(), etc.
+ *
+ * @typedef {import('../types/runtime.js').LauncherConfig} LauncherConfig
+ * @typedef {import('../types/runtime.js').TmuxRunner} TmuxRunner
  */
 
 import { readFileSync, mkdirSync, existsSync } from 'fs';
@@ -31,23 +34,30 @@ import {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+/** @returns {LauncherConfig} */
 function getConfig() {
-  const duetBase = process.env.DUET_BASE || `${process.env.HOME}/.local/state/duet`;
+  const duetBase = process.env.DUET_BASE || `${process.env.HOME || ''}/.local/state/duet`;
   return {
     duetBase,
     runsDir: `${duetBase}/runs`,
     workspacesDir: `${duetBase}/workspaces`,
-    duetDir: process.env.DUET_DIR, // set by entry point
-    socket: process.env.DUET_TMUX_SOCKET || null,
+    duetDir: process.env.DUET_DIR || '', // set by entry point
+    socket: process.env.DUET_TMUX_SOCKET,
     noAttach: process.env.DUET_NO_ATTACH === '1',
   };
 }
 
+/**
+ * @param {LauncherConfig} cfg
+ */
 function ensureDirs(cfg) {
   mkdirSync(cfg.runsDir, { recursive: true });
   mkdirSync(cfg.workspacesDir, { recursive: true });
 }
 
+/**
+ * @param {string} duetDir
+ */
 function startReconciler(duetDir) {
   const child = spawn('node', [join(duetDir, 'src/bindings/reconciler.mjs')], {
     detached: true,
@@ -57,6 +67,12 @@ function startReconciler(duetDir) {
   child.unref();
 }
 
+/**
+ * @param {string} sessionId
+ * @param {string} promptFile
+ * @param {boolean} isResume
+ * @returns {string}
+ */
 function buildClaudeCmd(sessionId, promptFile, isResume) {
   const prompt = readFileSync(promptFile, 'utf8');
   const escapedPrompt = shellQuote(prompt);
@@ -66,12 +82,25 @@ function buildClaudeCmd(sessionId, promptFile, isResume) {
   return `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt ${escapedPrompt}`;
 }
 
+/**
+ * @param {string} oldSessionId
+ * @param {string} newSessionId
+ * @param {string} promptFile
+ * @returns {string}
+ */
 function buildClaudeForkCmd(oldSessionId, newSessionId, promptFile) {
   const prompt = readFileSync(promptFile, 'utf8');
   const escapedPrompt = shellQuote(prompt);
   return `claude --dangerously-skip-permissions --resume ${oldSessionId} --fork-session --session-id ${newSessionId} --append-system-prompt ${escapedPrompt}`;
 }
 
+/**
+ * @param {string} codexHome
+ * @param {string} promptFile
+ * @param {string | null} sessionId
+ * @param {string} mode
+ * @returns {string}
+ */
 function buildCodexCmd(codexHome, promptFile, sessionId, mode) {
   const qHome = shellQuote(codexHome);
   const qPrompt = shellQuote(promptFile);
@@ -84,6 +113,10 @@ function buildCodexCmd(codexHome, promptFile, sessionId, mode) {
   return `CODEX_HOME=${qHome} codex --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=${qPrompt}`;
 }
 
+/**
+ * @param {string} p
+ * @returns {string}
+ */
 function canonicalizePath(p) {
   try {
     return execSync(`cd ${shellQuote(p)} && pwd -P`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
@@ -95,6 +128,9 @@ function canonicalizePath(p) {
 
 // ─── Commands ───────────────────────────────────────────────────────────────
 
+/**
+ * @param {string | undefined} workdirArg
+ */
 export function cmdNew(workdirArg) {
   const workdir = canonicalizePath(workdirArg || process.cwd());
   const cfg = getConfig();
@@ -183,6 +219,9 @@ export function cmdNew(workdirArg) {
   if (!cfg.noAttach) process.exitCode = tmuxAttach(tmuxSession, cfg.socket);
 }
 
+/**
+ * @param {string | undefined} ref
+ */
 export function cmdResume(ref) {
   const cfg = getConfig();
   ensureDirs(cfg);
@@ -286,6 +325,9 @@ export function cmdResume(ref) {
   if (!cfg.noAttach) process.exitCode = tmuxAttach(tmuxSession, cfg.socket);
 }
 
+/**
+ * @param {string | undefined} ref
+ */
 export function cmdFork(ref) {
   const cfg = getConfig();
   ensureDirs(cfg);
@@ -373,12 +415,18 @@ export function cmdFork(ref) {
   if (!cfg.noAttach) process.exitCode = tmuxAttach(tmuxSession, cfg.socket);
 }
 
+/**
+ * @param {string} progName
+ */
 export function cmdList(progName) {
   const cfg = getConfig();
   ensureDirs(cfg);
   process.stdout.write(listRuns(cfg.runsDir, progName));
 }
 
+/**
+ * @param {string | undefined} ref
+ */
 export function cmdDestroy(ref) {
   const cfg = getConfig();
   ensureDirs(cfg);

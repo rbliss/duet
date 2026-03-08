@@ -3,12 +3,17 @@ import { writeFile, unlink } from 'fs/promises';
 
 // Build tmux command prefix — uses isolated socket when DUET_TMUX_SOCKET is set.
 // Read lazily so tests can set process.env.DUET_TMUX_SOCKET after import.
+/** @returns {string} */
 function tmuxCmd() {
   return process.env.DUET_TMUX_SOCKET
     ? `tmux -S ${process.env.DUET_TMUX_SOCKET}`
     : 'tmux';
 }
 
+/**
+ * @param {string} cmd
+ * @returns {Promise<{stdout: string, stderr: string}>}
+ */
 function execAsync(cmd) {
   return new Promise((resolve, reject) => {
     exec(cmd, { encoding: 'utf8' }, (err, stdout, stderr) => {
@@ -18,13 +23,24 @@ function execAsync(cmd) {
   });
 }
 
+/**
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // Per-pane write queues to serialize sends/pastes to the same pane
+/** @type {Map<string, Promise<unknown>>} */
 const writeQueues = new Map();
 
+/**
+ * @template T
+ * @param {string} pane
+ * @param {() => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
 function enqueue(pane, fn) {
   const prev = writeQueues.get(pane) || Promise.resolve();
   const next = prev.then(fn, fn); // always proceed even if previous failed
@@ -35,11 +51,21 @@ function enqueue(pane, fn) {
 // Monotonic counter for unique buffer names and temp files across concurrent pastes
 let pasteSeq = 0;
 
+/**
+ * @param {string} text
+ * @returns {string}
+ */
 export function shellEscape(text) {
   return "'" + text.replace(/'/g, "'\"'\"'") + "'";
 }
 
+/**
+ * @param {string | undefined} pane
+ * @param {string} text
+ * @returns {Promise<boolean>}
+ */
 export async function sendKeys(pane, text) {
+  if (!pane) return false;
   return enqueue(pane, async () => {
     try {
       await execAsync(`${tmuxCmd()} send-keys -t ${shellEscape(pane)} -l ${shellEscape(text)}`);
@@ -53,7 +79,13 @@ export async function sendKeys(pane, text) {
   });
 }
 
+/**
+ * @param {string | undefined} pane
+ * @param {string} text
+ * @returns {Promise<boolean>}
+ */
 export async function pasteToPane(pane, text) {
+  if (!pane) return false;
   return enqueue(pane, async () => {
     const seq = pasteSeq++;
     const bufName = `duet-${seq}`;
@@ -75,6 +107,11 @@ export async function pasteToPane(pane, text) {
   });
 }
 
+/**
+ * @param {string} pane
+ * @param {number} [lines]
+ * @returns {Promise<string>}
+ */
 export async function capturePane(pane, lines = 50) {
   try {
     const { stdout } = await execAsync(
@@ -86,7 +123,12 @@ export async function capturePane(pane, lines = 50) {
   }
 }
 
+/**
+ * @param {string | undefined} pane
+ * @returns {Promise<boolean>}
+ */
 export async function focusPane(pane) {
+  if (!pane) return false;
   try {
     await execAsync(`${tmuxCmd()} select-pane -t ${shellEscape(pane)}`);
     return true;
@@ -95,6 +137,10 @@ export async function focusPane(pane) {
   }
 }
 
+/**
+ * @param {string} session
+ * @returns {Promise<boolean>}
+ */
 export async function killSession(session) {
   try {
     await execAsync(`${tmuxCmd()} kill-session -t ${shellEscape(session)}`);
@@ -104,6 +150,10 @@ export async function killSession(session) {
   }
 }
 
+/**
+ * @param {string} session
+ * @returns {Promise<boolean>}
+ */
 export async function detachClient(session) {
   try {
     await execAsync(`${tmuxCmd()} detach-client -s ${shellEscape(session)}`);
@@ -113,6 +163,11 @@ export async function detachClient(session) {
   }
 }
 
+/**
+ * @param {string} target
+ * @param {string} fmt
+ * @returns {Promise<string>}
+ */
 export async function displayMessage(target, fmt) {
   try {
     const { stdout } = await execAsync(

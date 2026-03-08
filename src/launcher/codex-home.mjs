@@ -9,6 +9,11 @@ import { join } from 'path';
 const CONFIG_FILES = ['auth.json', 'config.toml', 'version.json'];
 const CONFIG_DIRS = ['rules', 'skills'];
 
+/**
+ * Force-create a symlink (unlink + symlink for ln -sf parity).
+ * @param {string} target
+ * @param {string} linkPath
+ */
 function forceSymlink(target, linkPath) {
   try { unlinkSync(linkPath); } catch {}
   symlinkSync(target, linkPath);
@@ -20,7 +25,7 @@ function forceSymlink(target, linkPath) {
  * @param {string} [homeDir] - Override HOME for testing (defaults to process.env.HOME)
  */
 export function setupCodexHome(codexHome, homeDir) {
-  const home = homeDir || process.env.HOME;
+  const home = homeDir || process.env.HOME || '';
   const codexDir = join(home, '.codex');
 
   mkdirSync(join(codexHome, 'sessions'), { recursive: true });

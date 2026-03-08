@@ -1,5 +1,9 @@
 /**
  * Router controller: command handlers, output relay, banner, and main entry.
+ *
+ * @typedef {import('../types/runtime.js').ToolName} ToolName
+ * @typedef {import('../types/runtime.js').ConverseState} ConverseState
+ * @typedef {import('../types/runtime.js').SessionStateMap} SessionStateMap
  */
 
 import { createInterface } from 'readline';
@@ -19,14 +23,23 @@ import {
   sendKeys, pasteToPane, capturePane, focusPane,
   killSession, detachClient,
 } from '../transport/tmux-client.mjs';
-import { sessionState, resolveSessionPath } from '../relay/session-reader.mjs';
+import { sessionState as _sessionState, resolveSessionPath } from '../relay/session-reader.mjs';
+
+/** @type {SessionStateMap} */
+const sessionState = _sessionState;
 import { loadBindings } from '../runtime/bindings-store.mjs';
 import { updateRunJson } from '../runtime/run-store.mjs';
 import { collectDebugSnapshot, renderDebugReport } from '../debug/debug-report.mjs';
 
 // ─── Output relay ────────────────────────────────────────────────────────────
 
+/**
+ * @param {ToolName} source
+ * @param {string} newContent
+ * @returns {Promise<void>}
+ */
 export async function handleNewOutput(source, newContent) {
+  /** @type {ToolName} */
   const other = source === 'claude' ? 'codex' : 'claude';
   const now = Date.now();
   const converseState = getConverseState();
@@ -111,6 +124,10 @@ ${C.cyan}${C.bold}  DUET ${C.reset}${C.dim} - Claude Code + Codex, one conversat
 
 // ─── Input handling ──────────────────────────────────────────────────────────
 
+/**
+ * @param {string} input
+ * @returns {Promise<void>}
+ */
 async function handleInput(input) {
   const parsed = parseInput(input);
 
@@ -153,7 +170,7 @@ async function handleInput(input) {
     case 'watch': {
       startPolling();
       console.log(`${C.cyan}Watching for @mentions — tools can now talk to each other${C.reset}`);
-      for (const tool of ['claude', 'codex']) {
+      for (const tool of /** @type {ToolName[]} */ (['claude', 'codex'])) {
         const bs = bindingStatus(tool);
         const color = tool === 'claude' ? C.magenta : C.green;
         if (bs === 'bound' && watcherFailed.has(tool)) {
@@ -185,7 +202,7 @@ async function handleInput(input) {
       } else {
         console.log(`${C.dim}Idle — not watching${C.reset}`);
       }
-      for (const tool of ['claude', 'codex']) {
+      for (const tool of /** @type {ToolName[]} */ (['claude', 'codex'])) {
         const st = sessionState[tool];
         const bs = bindingStatus(tool);
         const color = tool === 'claude' ? C.magenta : C.green;
@@ -224,6 +241,7 @@ async function handleInput(input) {
         routerState: getRouterState(),
         bindings,
         runJson,
+        paneCaptures: null,
         full: false,
       });
       const report = renderDebugReport(snapshot);
@@ -264,7 +282,7 @@ async function handleInput(input) {
     }
     case 'converse': {
       // Resolve latest binding state
-      for (const t of ['claude', 'codex']) resolveSessionPath(t);
+      for (const t of /** @type {ToolName[]} */ (['claude', 'codex'])) resolveSessionPath(t);
       const cbs = bindingStatus('claude');
       const xbs = bindingStatus('codex');
       if (cbs !== 'bound' || xbs !== 'bound') {
@@ -298,7 +316,7 @@ async function handleInput(input) {
       return;
     case 'snap':
       if (PANES[parsed.target]) {
-        const output = await capturePane(PANES[parsed.target], parsed.lines);
+        const output = await capturePane(/** @type {string} */ (PANES[parsed.target]), parsed.lines);
         console.log(`${C.yellow}-- ${parsed.target} (last ${parsed.lines} lines) --${C.reset}`);
         console.log(output);
         console.log(`${C.yellow}-- end --${C.reset}`);
@@ -307,12 +325,12 @@ async function handleInput(input) {
       }
       return;
     case 'relay': {
-      const fromBs = bindingStatus(parsed.from);
+      const fromBs = bindingStatus(/** @type {ToolName} */ (parsed.from));
       if (fromBs !== 'bound') {
         console.log(`${C.red}Cannot relay — ${parsed.from} is not session-bound (${fromBs})${C.reset}`);
         return;
       }
-      const response = getSessionResponse(parsed.from);
+      const response = getSessionResponse(/** @type {ToolName} */ (parsed.from));
       if (!response) {
         console.log(`${C.red}No structured response available from ${parsed.from} — nothing to relay${C.reset}`);
         return;
@@ -392,7 +410,7 @@ export function main() {
 
   startPolling();
 
-  for (const tool of ['claude', 'codex']) {
+  for (const tool of /** @type {ToolName[]} */ (['claude', 'codex'])) {
     const bs = bindingStatus(tool);
     const st = sessionState[tool];
     const level = st.bindingLevel ? ` [${st.bindingLevel}]` : '';

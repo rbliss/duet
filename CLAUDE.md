@@ -22,6 +22,7 @@ src/
   bindings/reconciler.mjs       Binding reconciler (ported from bash+python to JS)
   bindings/reconciler.ts        TypeScript type layer (BindingReconcilerEnv)
   runtime/workspace.mjs         Workspace and run management helpers
+  types/runtime.ts              Shared type definitions (ToolName, ParsedInput, etc.)
   transport/tmux-client.mjs     Async tmux transport with per-pane write queues
   relay/session-reader.mjs      Incremental JSONL session reader, response extraction
   runtime/bindings-store.mjs    Binding manifest loader (STATE_DIR, loadBindings)
@@ -38,7 +39,6 @@ docs/
   LIVE_BINDING_DEGRADATION.md   Post-mortem on binding timing issue (resolved)
   RESUME_PLAN.md                Design doc for durable run state and session resume (completed)
   SHORT_TERM_TRANSPORT_PLAN.md  Transport reliability plan (Phases 1-5 completed)
-  1_*.md                        Iterative review/feedback passes from development
 ```
 
 ## Architecture
@@ -172,6 +172,27 @@ Key test patterns:
 - `setRunDir(dir)` points run manifest updates at a temp directory
 - Binding tests create mock session files and manifests in temp dirs
 - tmux tests use a dedicated `duet-test` session that's cleaned up in `after()`
+
+## Type checking
+
+The project uses JSDoc annotations with TypeScript's `checkJs` mode for type safety without a compile step. No `.mjs` files are transpiled — types are checked statically only.
+
+```bash
+npm run typecheck      # tsc --noEmit -p tsconfig.typecheck.json
+```
+
+**Setup:**
+- `tsconfig.typecheck.json` extends `tsconfig.json` with `allowJs: true`, `checkJs: true`, `noEmit: true`
+- Shared type definitions live in `src/types/runtime.ts` (`ToolName`, `ParsedInput`, `TmuxRunner`, etc.)
+- JSDoc `@typedef` imports use `.js` extension: `@typedef {import('../types/runtime.js').ParsedInput} ParsedInput`
+
+**Currently typed modules** (checked by `npm run typecheck`):
+- `src/router/commands.mjs`
+- `src/launcher/tmux.mjs`
+- `src/launcher/codex-home.mjs`
+- `src/runtime/workspace.mjs`
+
+**Untyped modules** have `// @ts-nocheck` at the top and are excluded from checking.
 
 ## Open work
 

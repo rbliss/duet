@@ -1,7 +1,7 @@
 import { exec, execSync } from 'child_process';
 import { existsSync, writeFileSync, readFileSync, mkdirSync, rmSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
-import { pasteToPane } from '../src/transport/tmux-client.mjs';
+import { pasteToPane, capturePane } from '../src/transport/tmux-client.mjs';
 import { sanitizedEnv } from './env.mjs';
 import { TEST_TMUX_SOCKET, tmuxEnv } from './tmux.mjs';
 
@@ -10,7 +10,7 @@ export function e2eSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 export async function e2eWaitFor(fn, timeoutMs = 15000, intervalMs = 300) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = fn();
+    const result = await fn();
     if (result) return result;
     await e2eSleep(intervalMs);
   }
@@ -103,6 +103,14 @@ export function createE2eHarness(tag, extraEnv = {}) {
     clearStartupLogs() {
       try { rmSync(join(inboxDir, 'claude-startup.log')); } catch {}
       try { rmSync(join(inboxDir, 'codex-startup.log')); } catch {}
+    },
+
+    async waitForRouterReady(timeoutMs = 10000) {
+      await e2eWaitFor(async () => {
+        const pane = await findRouterPane(h.tmuxSession);
+        const output = await capturePane(pane, 20);
+        return output.includes('duet>');
+      }, timeoutMs);
     },
 
     async sendToRouter(text) {

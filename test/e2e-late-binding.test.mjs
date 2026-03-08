@@ -16,8 +16,9 @@ describe('e2e: late-binding activation', { timeout: 60000 }, () => {
 
   after(() => h.cleanup());
 
-  it('starts with pending bindings', () => {
+  it('starts with pending bindings', async () => {
     assert.ok(h.runDir, 'run dir should exist');
+    await e2eWaitFor(() => !!h.readBindings(), 5000);
     const b = h.readBindings();
     assert.ok(b, 'bindings.json should exist');
     assert.ok(b.claude, 'claude binding entry should exist');

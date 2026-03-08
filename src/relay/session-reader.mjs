@@ -1,9 +1,17 @@
+/**
+ * @typedef {import('../types/runtime.js').ToolName} ToolName
+ * @typedef {import('../types/runtime.js').SessionToolState} SessionToolState
+ * @typedef {import('../types/runtime.js').SessionStateMap} SessionStateMap
+ * @typedef {import('../types/runtime.js').IncrementalReadResult} IncrementalReadResult
+ */
+
 import { statSync, openSync, readSync, closeSync, readFileSync } from 'fs';
 import { STATE_DIR, loadBindings } from '../runtime/bindings-store.mjs';
 import { updateRunJson } from '../runtime/run-store.mjs';
 
 let DUET_MODE = process.env.DUET_MODE || 'new';
 
+/** @param {string} mode */
 export function setDuetMode(mode) { DUET_MODE = mode; }
 
 // Session ownership model:
@@ -25,11 +33,16 @@ export function setDuetMode(mode) { DUET_MODE = mode; }
 // bindingLevel describes the ownership guarantee:
 //   'process'   — bound to exact launched process (both Claude and Codex)
 //   null        — not yet bound
+/** @type {SessionStateMap} */
 export const sessionState = {
   claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
   codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
 };
 
+/**
+ * @param {ToolName} tool
+ * @returns {string | null}
+ */
 export function resolveSessionPath(tool) {
   const st = sessionState[tool];
   if (st.resolved) return st.path;
@@ -55,6 +68,7 @@ export function resolveSessionPath(tool) {
       }
 
       // Propagate binding info to run.json
+      /** @type {Record<string, string>} */
       const updates = { [`${tool}.binding_path`]: b.path, updated_at: new Date().toISOString() };
       if (b.session_id) updates[`${tool}.session_id`] = b.session_id;
       updateRunJson(updates);
@@ -76,43 +90,65 @@ export function resolveSessionPath(tool) {
   return null;
 }
 
+/**
+ * @param {Record<string, unknown>} obj
+ * @returns {string | null}
+ */
 export function extractClaudeResponse(obj) {
-  const msg = obj.message;
+  const msg = /** @type {Record<string, unknown> | undefined} */ (obj.message);
   if (msg?.role !== 'assistant') return null;
+  /** @type {string[]} */
   const texts = [];
-  for (const block of msg.content || []) {
-    if (block.type === 'text' && block.text) texts.push(block.text);
+  for (const block of /** @type {Array<Record<string, unknown>>} */ (msg.content || [])) {
+    if (block.type === 'text' && block.text) texts.push(/** @type {string} */ (block.text));
   }
   return texts.length > 0 ? texts.join('\n') : null;
 }
 
+/**
+ * @param {Record<string, unknown>} obj
+ * @returns {string | null}
+ */
 export function extractCodexResponse(obj) {
-  if (obj.payload?.type === 'task_complete' && obj.payload.last_agent_message) {
-    return obj.payload.last_agent_message;
+  const payload = /** @type {Record<string, unknown> | undefined} */ (obj.payload);
+  if (payload?.type === 'task_complete' && payload.last_agent_message) {
+    return /** @type {string} */ (payload.last_agent_message);
   }
-  if (obj.type === 'event_msg' && obj.payload?.type === 'message' && obj.payload.role === 'assistant') {
+  if (obj.type === 'event_msg' && payload?.type === 'message' && payload.role === 'assistant') {
+    /** @type {string[]} */
     const texts = [];
-    for (const block of obj.payload.content || []) {
-      if (block.type === 'output_text' && block.text) texts.push(block.text);
-      if (block.type === 'text' && block.text) texts.push(block.text);
+    for (const block of /** @type {Array<Record<string, unknown>>} */ (payload.content || [])) {
+      if (block.type === 'output_text' && block.text) texts.push(/** @type {string} */ (block.text));
+      if (block.type === 'text' && block.text) texts.push(/** @type {string} */ (block.text));
     }
     return texts.length > 0 ? texts.join('\n') : null;
   }
   return null;
 }
 
-// Detect JSONL entries that signal the tool has finished its response.
+/**
+ * Detect JSONL entries that signal the tool has finished its response.
+ * @param {string} tool
+ * @param {Record<string, unknown>} obj
+ * @returns {boolean}
+ */
 export function isResponseComplete(tool, obj) {
   if (tool === 'claude') {
     if (obj.type === 'result') return true;
-    if (obj.message?.role === 'assistant' && obj.message?.stop_reason === 'end_turn') return true;
+    const msg = /** @type {Record<string, unknown> | undefined} */ (obj.message);
+    if (msg?.role === 'assistant' && msg?.stop_reason === 'end_turn') return true;
   }
   if (tool === 'codex') {
-    if (obj.payload?.type === 'task_complete') return true;
+    const payload = /** @type {Record<string, unknown> | undefined} */ (obj.payload);
+    if (payload?.type === 'task_complete') return true;
   }
   return false;
 }
 
+/**
+ * @param {ToolName} tool
+ * @returns {IncrementalReadResult}
+ */
 export function readIncremental(tool) {
   const st = sessionState[tool];
   const filePath = resolveSessionPath(tool);
@@ -153,22 +189,31 @@ export function readIncremental(tool) {
   return { hasNew, complete };
 }
 
+/** @returns {string | null} */
 export function getClaudeLastResponse() {
   readIncremental('claude');
   return sessionState.claude.lastResponse;
 }
 
+/** @returns {string | null} */
 export function getCodexLastResponse() {
   readIncremental('codex');
   return sessionState.codex.lastResponse;
 }
 
+/**
+ * @param {ToolName} tool
+ * @returns {string | null}
+ */
 export function getLastResponse(tool) {
   return tool === 'claude' ? getClaudeLastResponse() : getCodexLastResponse();
 }
 
-// Extract Codex session ID from payload.id in the first JSONL line.
-// Matches bind-sessions.sh's extract_codex_session_id behavior.
+/**
+ * Extract Codex session ID from payload.id in the first JSONL line.
+ * @param {string} filePath
+ * @returns {string | null}
+ */
 export function extractCodexSessionId(filePath) {
   try {
     const content = readFileSync(filePath, 'utf8');

@@ -319,7 +319,7 @@ describe('watcher failure visibility', () => {
 
   it('rebindTool clears watcherFailed on successful watcher start', () => {
     const src = readRouterSource();
-    const rebindBlock = src.slice(src.indexOf('export async function rebindTool'), src.indexOf('export async function rebindTool') + 800);
+    const rebindBlock = src.slice(src.indexOf('export async function rebindTool'), src.indexOf('export async function rebindTool') + 1000);
     assert.ok(rebindBlock.includes('watcherFailed.delete(tool)'), 'rebindTool should clear watcherFailed');
   });
 
@@ -355,7 +355,7 @@ describe('transport delivery failure handling', () => {
 
   it('@relay checks pasteToPane result', () => {
     const src = readRouterSource();
-    const relayBlock = src.slice(src.indexOf("case 'relay':"), src.indexOf("case 'relay':") + 800);
+    const relayBlock = src.slice(src.indexOf("case 'relay':"), src.indexOf("case 'relay':") + 1000);
     assert.ok(relayBlock.includes('await pasteToPane') && relayBlock.includes('Failed to relay'), '@relay should check delivery');
   });
 
