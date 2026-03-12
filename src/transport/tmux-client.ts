@@ -32,6 +32,12 @@ function enqueue<T>(pane: string, fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
+// Delay between paste-buffer and send-keys Enter.
+// TUI apps (Claude Code, Codex/Ink) may need time to process a bracketed paste
+// before they're ready to accept Enter. Too short → Enter is ignored and the
+// message sits in the input field without being submitted.
+const PASTE_SUBMIT_DELAY_MS = 1000;
+
 // Monotonic counter for unique buffer names and temp files across concurrent pastes.
 // Buffer names include PID to avoid collisions when multiple processes share a tmux server.
 let pasteSeq = 0;
@@ -66,7 +72,7 @@ export async function pasteToPane(pane: string | undefined, text: string): Promi
       await execAsync(`${tmuxCmd()} load-buffer -b ${shellEscape(bufName)} ${shellEscape(tmp)}`);
       await execAsync(`${tmuxCmd()} paste-buffer -p -b ${shellEscape(bufName)} -t ${shellEscape(pane)}`);
       // Wait for TUI to process the pasted content before submitting
-      await delay(500);
+      await delay(PASTE_SUBMIT_DELAY_MS);
       await execAsync(`${tmuxCmd()} send-keys -t ${shellEscape(pane)} Enter`);
       return true;
     } catch {

@@ -1,11 +1,14 @@
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { execSync } from 'child_process';
-import { existsSync } from 'fs';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, rmSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
 import { sendKeys, capturePane, pasteToPane, focusPane } from '../router.mjs';
 import { TEST_TMUX_SOCKET, tmuxEnv, tmux, cleanupTmuxSession } from '../test-support/tmux.mjs';
+
+const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const TEST_SESSION = `duet-test-${process.pid}`;
 let paneA, paneB;
@@ -358,5 +361,109 @@ describe('cross-process paste safety', { timeout: 30000 }, () => {
       try { unlinkSync(scriptA); } catch {}
       try { unlinkSync(scriptB); } catch {}
     }
+  });
+});
+
+// ─── Regression: paste-settle timing ─────────────────────────────────────────
+
+describe('pasteToPane paste-settle regression', { timeout: 30000 }, () => {
+  const SETTLE_SESSION = `duet-settle-${process.pid}`;
+  const tmpDir = `/tmp/duet-settle-test-${process.pid}`;
+  const inboxFile = join(tmpDir, 'fake-tui-inbox.log');
+  let settlePane;
+
+  before(() => {
+    mkdirSync(tmpDir, { recursive: true });
+    cleanupTmuxSession(SETTLE_SESSION);
+
+    // Launch fake-tui in a tmux pane with 800ms paste settle
+    const fakeTui = join(PROJECT_ROOT, 'test-support', 'fake-tui.mjs');
+    settlePane = tmux(
+      `new-session -d -s ${SETTLE_SESSION} -x 120 -y 40 -P -F '#{pane_id}' ` +
+      `"FAKE_PASTE_SETTLE_MS=800 FAKE_TUI_INBOX='${inboxFile}' node '${fakeTui}'"`
+    );
+
+    // Wait for fake-tui to be ready
+    execSync('sleep 1');
+  });
+
+  after(() => {
+    cleanupTmuxSession(SETTLE_SESSION);
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('pasteToPane submits message to TUI with paste-settle timing', async () => {
+    const token = `SETTLE_TOKEN_${Date.now()}`;
+    const ok = await pasteToPane(settlePane, `test message ${token}`);
+    assert.ok(ok, 'pasteToPane should return true');
+
+    // Wait for the TUI to process
+    execSync('sleep 1.5');
+
+    // Verify the message was actually submitted (not just pasted)
+    const captured = await capturePane(settlePane, 20);
+    assert.ok(captured.includes(`SUBMITTED: test message ${token}`),
+      `Expected SUBMITTED marker in pane output: ${captured}`);
+
+    // Also verify the inbox file has the submission
+    const inbox = readFileSync(inboxFile, 'utf8');
+    assert.ok(inbox.includes(token),
+      `Expected token in inbox file: ${inbox}`);
+  });
+
+  it('handles multiple pastes in sequence', async () => {
+    for (let i = 0; i < 3; i++) {
+      const token = `SEQ_${i}_${Date.now()}`;
+      await pasteToPane(settlePane, `seq message ${token}`);
+      execSync('sleep 1.5');
+
+      const inbox = readFileSync(inboxFile, 'utf8');
+      assert.ok(inbox.includes(token),
+        `Paste ${i} should be submitted: ${token}`);
+    }
+  });
+
+  it('old timing: draft visible but not sent, then later Enter submits', async () => {
+    // Simulate the OLD 500ms delay using raw tmux commands.
+    // With 800ms settle, 500ms is too short — Enter is ignored, draft persists.
+    const token = `OLD_TIMING_${Date.now()}`;
+    const tmp = join(tmpDir, 'old-timing-paste.txt');
+    const bufName = `duet-old-timing-${process.pid}`;
+
+    const { writeFileSync: wfs } = await import('fs');
+    wfs(tmp, `old timing message ${token}`);
+
+    const tmuxPrefix = `tmux -S ${TEST_TMUX_SOCKET}`;
+    execSync(`${tmuxPrefix} load-buffer -b '${bufName}' '${tmp}'`, { env: tmuxEnv });
+    execSync(`${tmuxPrefix} paste-buffer -p -b '${bufName}' -t '${settlePane}'`, { env: tmuxEnv });
+
+    // OLD delay: 500ms (too short for 800ms settle)
+    execSync('sleep 0.5');
+    execSync(`${tmuxPrefix} send-keys -t '${settlePane}' Enter`, { env: tmuxEnv });
+
+    execSync('sleep 0.3');
+
+    // 1. Draft IS visible in the pane (message copied but not sent)
+    const captured = await capturePane(settlePane, 20);
+    assert.ok(captured.includes(token),
+      `Draft should be visible in pane: ${captured}`);
+
+    // 2. Inbox does NOT have the token yet (not submitted)
+    const inboxBefore = readFileSync(inboxFile, 'utf8');
+    assert.ok(!inboxBefore.includes(token),
+      `Token should NOT be in inbox yet (Enter was ignored): ${inboxBefore}`);
+
+    // 3. Wait past settle period, then send Enter again — draft should submit
+    execSync('sleep 1');
+    execSync(`${tmuxPrefix} send-keys -t '${settlePane}' Enter`, { env: tmuxEnv });
+    execSync('sleep 0.5');
+
+    const inboxAfter = readFileSync(inboxFile, 'utf8');
+    assert.ok(inboxAfter.includes(token),
+      `Token should now be in inbox after later Enter: ${inboxAfter}`);
+
+    // Cleanup
+    try { execSync(`${tmuxPrefix} delete-buffer -b '${bufName}'`, { env: tmuxEnv }); } catch {}
+    try { rmSync(tmp); } catch {}
   });
 });
