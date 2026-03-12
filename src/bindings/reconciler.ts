@@ -13,6 +13,8 @@
 import type { ReconcilerEnv, ReconcilerToolState } from '../types/runtime.js';
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'fs';
 import { join, basename } from 'path';
+import { nowIso } from '../runtime/workspace.js';
+import { extractCodexSessionId } from '../relay/session-reader.js';
 
 // ─── Environment contract ────────────────────────────────────────────────────
 
@@ -50,16 +52,6 @@ function parseEnv(): Readonly<ReconcilerEnv> {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function extractCodexSessionId(filePath: string): string {
-  try {
-    const firstLine = readFileSync(filePath, 'utf8').split('\n')[0];
-    const data = JSON.parse(firstLine);
-    return (data.payload && data.payload.id) || '';
-  } catch {
-    return '';
-  }
-}
-
 function extractCodexCwd(filePath: string): string {
   try {
     const firstLine = readFileSync(filePath, 'utf8').split('\n')[0];
@@ -95,10 +87,6 @@ function _walkDir(dir: string, results: string[]): void {
       results.push(fullPath);
     }
   }
-}
-
-function nowIso(): string {
-  return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function sleep(ms: number): Promise<void> {
@@ -157,7 +145,7 @@ export async function reconcile(envOverride?: ReconcilerEnv): Promise<void> {
   }
 
   if (env.resumeCodexPath && existsSync(env.resumeCodexPath)) {
-    const extractedId = extractCodexSessionId(env.resumeCodexPath);
+    const extractedId = extractCodexSessionId(env.resumeCodexPath) || '';
     if (!env.resumeCodexSessionId || extractedId === env.resumeCodexSessionId) {
       codexBound = true;
       state.codex.status = 'bound';
@@ -205,7 +193,7 @@ export async function reconcile(envOverride?: ReconcilerEnv): Promise<void> {
         state.codex.status = 'bound';
         state.codex.path = codexFile;
         state.codex.level = 'process';
-        state.codex.sessionId = extractCodexSessionId(codexFile);
+        state.codex.sessionId = extractCodexSessionId(codexFile) || '';
         writeManifest(state, env.stateDir);
       }
     }
@@ -227,7 +215,7 @@ export async function reconcile(envOverride?: ReconcilerEnv): Promise<void> {
         state.codex.status = 'bound';
         state.codex.path = candidate;
         state.codex.level = 'workspace';
-        state.codex.sessionId = extractCodexSessionId(candidate);
+        state.codex.sessionId = extractCodexSessionId(candidate) || '';
         writeManifest(state, env.stateDir);
         break;
       }

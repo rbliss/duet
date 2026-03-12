@@ -245,14 +245,6 @@ export function stopPolling(): void {
 // ─── Rebind ──────────────────────────────────────────────────────────────────
 
 /**
- * No-op: retained as export for test backward compat but no longer changes transport.
- */
-export function downgradeToPane(tool: string, reason: string): void {
-  console.log(`\n${C.yellow}${tool}: ${reason} — use /rebind ${tool} to re-discover session${C.reset}`);
-  prompt();
-}
-
-/**
  * Find the best rebind candidate by scanning for recent .jsonl files.
  */
 export function findRebindCandidate(tool: ToolName): string | null {
@@ -291,7 +283,6 @@ export async function rebindTool(tool: ToolName, newPath: string): Promise<{ old
   st.path = newPath;
   st.resolved = true;
   st.relayMode = 'session';
-  st.staleDowngraded = false;
   st.lastResponse = null;
 
   try {

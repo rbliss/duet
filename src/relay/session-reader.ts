@@ -27,8 +27,8 @@ export function setDuetMode(mode: string): void { DUET_MODE = mode; }
 //   'process'   — bound to exact launched process (both Claude and Codex)
 //   null        — not yet bound
 export const sessionState: SessionStateMap = {
-  claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
-  codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+  claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 },
+  codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 },
 };
 
 export function resolveSessionPath(tool: ToolName): string | null {

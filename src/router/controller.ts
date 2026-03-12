@@ -15,7 +15,7 @@ import {
   getConverseState, setConverseState, setNewOutputHandler,
   getSessionResponse, readRunJson, getRouterState,
   startPolling, stopPolling, startFileWatcher, stopFileWatchers,
-  findRebindCandidate, rebindTool, downgradeToPane,
+  findRebindCandidate, rebindTool,
 } from './state.js';
 import {
   sendKeys, pasteToPane, capturePane, focusPane,

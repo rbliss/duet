@@ -109,7 +109,6 @@ export interface SessionToolState {
   relayMode: string;
   bindingLevel: string | null;
   lastSessionActivityAt: number;
-  staleDowngraded: boolean;
 }
 
 /** Session state map keyed by tool name. */

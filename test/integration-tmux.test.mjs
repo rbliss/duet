@@ -1,7 +1,7 @@
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { execSync } from 'child_process';
-import { existsSync, readFileSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -314,9 +314,6 @@ describe('cross-process paste safety', { timeout: 30000 }, () => {
       process.exit(ok ? 0 : 1);
     `;
 
-    const { execSync: es } = await import('child_process');
-    const { writeFileSync, unlinkSync } = await import('fs');
-
     // Write helper scripts
     const scriptA = `/tmp/duet-xproc-a-${process.pid}.mjs`;
     const scriptB = `/tmp/duet-xproc-b-${process.pid}.mjs`;
@@ -430,16 +427,14 @@ describe('pasteToPane paste-settle regression', { timeout: 30000 }, () => {
     const tmp = join(tmpDir, 'old-timing-paste.txt');
     const bufName = `duet-old-timing-${process.pid}`;
 
-    const { writeFileSync: wfs } = await import('fs');
-    wfs(tmp, `old timing message ${token}`);
+    writeFileSync(tmp, `old timing message ${token}`);
 
-    const tmuxPrefix = `tmux -S ${TEST_TMUX_SOCKET}`;
-    execSync(`${tmuxPrefix} load-buffer -b '${bufName}' '${tmp}'`, { env: tmuxEnv });
-    execSync(`${tmuxPrefix} paste-buffer -p -b '${bufName}' -t '${settlePane}'`, { env: tmuxEnv });
+    tmux(`load-buffer -b '${bufName}' '${tmp}'`);
+    tmux(`paste-buffer -p -b '${bufName}' -t '${settlePane}'`);
 
     // OLD delay: 500ms (too short for 800ms settle)
     execSync('sleep 0.5');
-    execSync(`${tmuxPrefix} send-keys -t '${settlePane}' Enter`, { env: tmuxEnv });
+    tmux(`send-keys -t '${settlePane}' Enter`);
 
     execSync('sleep 0.3');
 
@@ -455,7 +450,7 @@ describe('pasteToPane paste-settle regression', { timeout: 30000 }, () => {
 
     // 3. Wait past settle period, then send Enter again — draft should submit
     execSync('sleep 1');
-    execSync(`${tmuxPrefix} send-keys -t '${settlePane}' Enter`, { env: tmuxEnv });
+    tmux(`send-keys -t '${settlePane}' Enter`);
     execSync('sleep 0.5');
 
     const inboxAfter = readFileSync(inboxFile, 'utf8');
@@ -463,7 +458,7 @@ describe('pasteToPane paste-settle regression', { timeout: 30000 }, () => {
       `Token should now be in inbox after later Enter: ${inboxAfter}`);
 
     // Cleanup
-    try { execSync(`${tmuxPrefix} delete-buffer -b '${bufName}'`, { env: tmuxEnv }); } catch {}
-    try { rmSync(tmp); } catch {}
+    try { tmux(`delete-buffer -b '${bufName}'`); } catch {}
+    try { unlinkSync(tmp); } catch {}
   });
 });

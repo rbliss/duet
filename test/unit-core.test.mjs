@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execSync } from 'child_process';
 
-import { shellEscape, parseInput, getNewContent, detectMentions, cleanCapture } from '../router.mjs';
+import { shellEscape, parseInput, detectMentions } from '../router.mjs';
 
 // ─── Unit Tests: shellEscape ─────────────────────────────────────────────────
 
@@ -206,117 +206,6 @@ describe('parseInput', () => {
   });
 });
 
-// ─── Unit Tests: getNewContent ───────────────────────────────────────────────
-
-describe('getNewContent', () => {
-  it('returns current when baseline is empty', () => {
-    assert.equal(getNewContent('', 'hello world'), 'hello world');
-  });
-
-  it('returns empty when baseline equals current', () => {
-    assert.equal(getNewContent('same', 'same'), '');
-  });
-
-  it('extracts new lines appended after baseline', () => {
-    const baseline = 'line1\nline2\nline3';
-    const current = 'line1\nline2\nline3\nline4\nline5';
-    const result = getNewContent(baseline, current);
-    assert.ok(result.includes('line4'));
-    assert.ok(result.includes('line5'));
-  });
-
-  it('handles screen scroll where baseline is gone', () => {
-    const baseline = 'old1\nold2\nold3';
-    const current = 'new1\nnew2\nnew3';
-    const result = getNewContent(baseline, current);
-    assert.ok(result.includes('new1'));
-    assert.ok(result.includes('new2'));
-    assert.ok(result.includes('new3'));
-  });
-
-  it('handles partial overlap', () => {
-    const baseline = 'line1\nline2\nline3\nprompt$';
-    const current = 'line2\nline3\nprompt$\nresponse line 1\nresponse line 2';
-    const result = getNewContent(baseline, current);
-    assert.ok(result.includes('response line 1'));
-    assert.ok(result.includes('response line 2'));
-  });
-
-  it('handles terminal output with empty lines', () => {
-    const baseline = 'prompt$ cmd\n\noutput1\n';
-    const current = 'prompt$ cmd\n\noutput1\n\noutput2\nprompt$';
-    const result = getNewContent(baseline, current);
-    assert.ok(result.includes('output2'));
-  });
-
-  it('detects content inserted above preserved footer (Claude TUI pattern)', () => {
-    const baseline = [
-      '> analyze the error handling',
-      '',
-      'Thinking...',
-      '',
-      '╭─────────────────────────────────╮',
-      '│  ⏎ to send  /help for commands  │',
-      '╰─────────────────────────────────╯',
-    ].join('\n');
-    const current = [
-      '> analyze the error handling',
-      '',
-      "I've analyzed the error handling.",
-      'I think @codex should review this.',
-      'The main issues are:',
-      '1. Missing try/catch in auth.ts',
-      '',
-      '╭─────────────────────────────────╮',
-      '│  ⏎ to send  /help for commands  │',
-      '╰─────────────────────────────────╯',
-    ].join('\n');
-    const result = getNewContent(baseline, current);
-    assert.ok(result.includes('@codex'), `Expected @codex mention in result, got: "${result}"`);
-    assert.ok(result.includes('Missing try/catch'));
-    assert.ok(!result.includes('⏎ to send'), 'Should not include preserved footer');
-  });
-
-  it('detects content inserted above footer with identical prompt line', () => {
-    const baseline = [
-      'Claude Code v1.0',
-      '> some prompt',
-      '$',
-    ].join('\n');
-    const current = [
-      'Claude Code v1.0',
-      '> some prompt',
-      'Here is my response mentioning @codex for review.',
-      '$',
-    ].join('\n');
-    const result = getNewContent(baseline, current);
-    assert.ok(result.includes('@codex'), `Expected @codex mention, got: "${result}"`);
-    assert.ok(!result.includes('Claude Code'), 'Should not include preserved header');
-  });
-
-  it('handles content inserted between header and multi-line footer', () => {
-    const baseline = [
-      'header line 1',
-      'header line 2',
-      'footer line 1',
-      'footer line 2',
-    ].join('\n');
-    const current = [
-      'header line 1',
-      'header line 2',
-      'NEW LINE A',
-      'NEW LINE B with @codex',
-      'footer line 1',
-      'footer line 2',
-    ].join('\n');
-    const result = getNewContent(baseline, current);
-    assert.ok(result.includes('NEW LINE A'));
-    assert.ok(result.includes('@codex'));
-    assert.ok(!result.includes('header line'));
-    assert.ok(!result.includes('footer line'));
-  });
-});
-
 // ─── Unit Tests: detectMentions ──────────────────────────────────────────────
 
 describe('detectMentions', () => {
@@ -358,65 +247,6 @@ describe('detectMentions', () => {
   it('matches with punctuation after', () => {
     assert.deepEqual(detectMentions('@claude, what do you think?'), ['claude']);
     assert.deepEqual(detectMentions('ask @codex.'), ['codex']);
-  });
-});
-
-// ─── Unit Tests: cleanCapture ────────────────────────────────────────────────
-
-describe('cleanCapture', () => {
-  it('strips box-drawing border lines', () => {
-    const input = '╭──────────────────────╮\n│ Hello world          │\n╰──────────────────────╯';
-    const result = cleanCapture(input);
-    assert.ok(result.includes('Hello world'));
-    assert.ok(!result.includes('╭'));
-    assert.ok(!result.includes('╰'));
-  });
-
-  it('strips spinner/thinking lines', () => {
-    const input = '⠋ Thinking...\nActual response text here\n⠙ Working on it...';
-    const result = cleanCapture(input);
-    assert.ok(result.includes('Actual response text here'));
-    assert.ok(!result.includes('Thinking'));
-    assert.ok(!result.includes('Working'));
-  });
-
-  it('strips status bar hints', () => {
-    const input = 'Some real content\n⏎ to send  /help for commands\nMore content';
-    const result = cleanCapture(input);
-    assert.ok(result.includes('Some real content'));
-    assert.ok(result.includes('More content'));
-    assert.ok(!result.includes('⏎'));
-  });
-
-  it('strips leading pipe chars from content lines', () => {
-    const input = '│ This is actual content │\n│ And more content      │';
-    const result = cleanCapture(input);
-    assert.ok(result.includes('This is actual content'));
-    assert.ok(!result.startsWith('│'));
-  });
-
-  it('preserves meaningful text', () => {
-    const input = 'I analyzed the code and found 3 issues:\n1. Missing null check in auth.ts\n2. SQL injection in query.ts\n3. No rate limiting on /api/login';
-    const result = cleanCapture(input);
-    assert.equal(result, input);
-  });
-
-  it('returns empty for pure chrome', () => {
-    const input = '╭───────────────╮\n│               │\n╰───────────────╯\n\n';
-    const result = cleanCapture(input);
-    assert.equal(result, '');
-  });
-
-  it('handles empty input', () => {
-    assert.equal(cleanCapture(''), '');
-    assert.equal(cleanCapture(null), '');
-  });
-
-  it('strips tool header lines', () => {
-    const input = 'Claude Code v1.2.3\nHere is my analysis';
-    const result = cleanCapture(input);
-    assert.ok(!result.includes('Claude Code v'));
-    assert.ok(result.includes('Here is my analysis'));
   });
 });
 
@@ -474,15 +304,5 @@ describe('edge cases', () => {
   it('detectMentions ignores email-like patterns', () => {
     const result = detectMentions('email user@claude.ai');
     assert.ok(result.length >= 0);
-  });
-
-  it('getNewContent handles identical multiline content', () => {
-    const text = 'line1\nline2\nline3';
-    assert.equal(getNewContent(text, text), '');
-  });
-
-  it('getNewContent handles completely new content', () => {
-    const result = getNewContent('old stuff', 'totally new content');
-    assert.ok(result.includes('totally new content'));
   });
 });

@@ -17,6 +17,7 @@ import { createInterface } from 'readline';
 import { mkdirSync, appendFileSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import { createTuiStdin } from './tui-stdin.mjs';
 
 // Parse launch mode: `codex resume <id> ...` vs `codex ...`
 const args = process.argv.slice(2);
@@ -137,64 +138,10 @@ function processInputLine(trimmed) {
 const pasteSettleMs = parseInt(process.env.FAKE_PASTE_SETTLE_MS || '0', 10);
 
 if (pasteSettleMs > 0 && process.stdin.isTTY) {
-  // TUI mode: raw stdin with bracketed paste detection and settle timing.
-  // Reproduces the real failure mode:
-  //   1. Pasted content is rendered visibly as a draft in the pane
-  //   2. Enter is ignored if it arrives before settle period elapses
-  //   3. Draft persists — a later Enter (after settle) submits it
-  process.stdout.write('\x1b[?2004h'); // enable bracketed paste
-  process.stdin.setRawMode(true);
-  process.stdin.resume();
-
-  let inputBuf = '';
-  let pasteEndAt = 0;
-
-  function renderDraft() {
-    process.stdout.write(`\r\x1b[K[draft] ${inputBuf}`);
-  }
-
+  // TUI mode: uses shared raw-stdin handler with bracketed paste detection
+  // and settle timing. See tui-stdin.mjs for the implementation.
   console.log(`fake-codex: TUI mode (settle=${pasteSettleMs}ms)`);
-
-  process.stdin.on('data', (data) => {
-    let str = data.toString('utf8');
-
-    // Detect and strip bracketed paste markers
-    if (str.includes('\x1b[200~')) {
-      str = str.replace('\x1b[200~', '');
-    }
-    if (str.includes('\x1b[201~')) {
-      str = str.replace('\x1b[201~', '');
-      pasteEndAt = Date.now();
-    }
-
-    for (const ch of str) {
-      if (ch === '\r' || ch === '\n') {
-        if (!inputBuf.trim()) continue;
-
-        const elapsed = Date.now() - pasteEndAt;
-        if (pasteEndAt > 0 && elapsed < pasteSettleMs) {
-          // Enter too soon — ignore but KEEP draft for later submission
-          console.log(`\n[settle] Enter ignored (${elapsed}ms < ${pasteSettleMs}ms)`);
-          renderDraft();
-          continue;
-        }
-
-        // Accept submission
-        const line = inputBuf.trim();
-        inputBuf = '';
-        pasteEndAt = 0;
-        processInputLine(line);
-        continue;
-      }
-      if (ch === '\x03') process.exit(0); // Ctrl+C
-      if (ch.charCodeAt(0) >= 32 || ch === '\t') inputBuf += ch;
-    }
-
-    // Render draft after each data chunk so pasted content is visible
-    if (inputBuf) renderDraft();
-  });
-
-  process.stdin.on('end', () => process.exit(0));
+  createTuiStdin(pasteSettleMs, processInputLine);
 } else {
   // Line mode (default): simple readline-based input
   const rl = createInterface({ input: process.stdin });

@@ -4,7 +4,7 @@ import { execSync } from 'child_process';
 import { writeFileSync, mkdirSync, rmSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 
-import { parseInput, sessionState, handleNewOutput, lastAutoRelayTime, downgradeToPane, findRebindCandidate, rebindTool, stopFileWatchers, extractCodexSessionId, watcherFailed, setStateDir, setRunDir, collectDebugSnapshot, renderDebugReport, getRouterState } from '../router.mjs';
+import { parseInput, sessionState, handleNewOutput, lastAutoRelayTime, findRebindCandidate, rebindTool, stopFileWatchers, extractCodexSessionId, watcherFailed, setStateDir, setRunDir, collectDebugSnapshot, renderDebugReport, getRouterState } from '../router.mjs';
 
 // Read all router source files (equivalent to the old monolithic router.mjs)
 function readRouterSource() {
@@ -57,22 +57,9 @@ describe('stale binding detection', () => {
     assert.deepStrictEqual(result, { type: 'rebind', target: 'codex' });
   });
 
-  it('sessionState includes stale-detection fields', () => {
+  it('sessionState includes activity tracking field', () => {
     assert.ok('lastSessionActivityAt' in sessionState.claude);
-    assert.ok('staleDowngraded' in sessionState.claude);
     assert.ok('lastSessionActivityAt' in sessionState.codex);
-    assert.ok('staleDowngraded' in sessionState.codex);
-  });
-
-  it('downgradeToPane is a no-op that does not change transport', () => {
-    const origMode = sessionState.claude.relayMode;
-    sessionState.claude.relayMode = 'session';
-
-    downgradeToPane('claude', 'test reason');
-
-    assert.equal(sessionState.claude.relayMode, 'session');
-
-    sessionState.claude.relayMode = origMode;
   });
 
   it('/rebind is the supported repair path for stale bindings', () => {
@@ -98,12 +85,10 @@ describe('rebind candidate search', () => {
     sessionState.claude.offset = 0;
     sessionState.claude.lastResponse = null;
     sessionState.claude.relayMode = 'pending';
-    sessionState.claude.staleDowngraded = false;
     sessionState.claude.lastSessionActivityAt = 0;
     sessionState.codex.path = null;
     sessionState.codex.resolved = false;
     sessionState.codex.relayMode = 'pending';
-    sessionState.codex.staleDowngraded = false;
   });
 
   it('finds newer .jsonl file as rebind candidate', () => {
@@ -144,7 +129,6 @@ describe('rebind candidate search', () => {
     sessionState.claude.path = staleFile;
     sessionState.claude.resolved = true;
     sessionState.claude.relayMode = 'pane';
-    sessionState.claude.staleDowngraded = true;
 
     const runDir = join(testDir, 'run');
     mkdirSync(runDir, { recursive: true });
@@ -157,7 +141,6 @@ describe('rebind candidate search', () => {
     assert.equal(result.newSid, '12345678-abcd-1234-abcd-123456789012');
     assert.equal(sessionState.claude.path, newFile);
     assert.equal(sessionState.claude.relayMode, 'session');
-    assert.equal(sessionState.claude.staleDowngraded, false);
     const { size } = statSync(newFile);
     assert.equal(sessionState.claude.offset, size);
 
@@ -214,8 +197,8 @@ describe('codex rebind session ID extraction', () => {
     rmSync(testDir, { recursive: true, force: true });
     setRunDir(null);
     setStateDir(null);
-    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false };
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
   });
 
   it('extractCodexSessionId reads payload.id from first JSONL line', () => {
@@ -406,13 +389,11 @@ describe('session-only automation', () => {
     }
   });
 
-  it('router no longer uses getNewContent or cleanCapture in automation paths', () => {
+  it('router source does not contain removed dead code', () => {
     const src = readRouterSource();
     assert.ok(!src.includes('getCleanResponse'), 'getCleanResponse should be removed');
-    const start = src.indexOf('async function handleNewOutput');
-    const automationBlock = src.slice(start, src.indexOf('// ─── Banner', start));
-    assert.ok(!automationBlock.includes('getNewContent'), 'getNewContent should not be used in automation');
-    assert.ok(!automationBlock.includes('cleanCapture'), 'cleanCapture should not be used in automation');
+    assert.ok(!src.includes('getNewContent'), 'getNewContent should be removed');
+    assert.ok(!src.includes('cleanCapture'), 'cleanCapture should be removed');
   });
 
   it('handleNewOutput uses session response, not pane capture', () => {
@@ -493,12 +474,8 @@ describe('/watch and /status messaging', () => {
 
   it('no stale auto-downgrade remains', () => {
     const src = readRouterSource();
-    const dgBlock = src.slice(
-      src.indexOf('export function downgradeToPane'),
-      src.indexOf('export function downgradeToPane') + 300
-    );
-    assert.ok(!dgBlock.includes("st.relayMode = 'pane'"), 'downgradeToPane should not change relayMode');
-    assert.ok(!dgBlock.includes('staleDowngraded = true'), 'downgradeToPane should not set staleDowngraded');
+    assert.ok(!src.includes('downgradeToPane'), 'downgradeToPane should be removed');
+    assert.ok(!src.includes('staleDowngraded'), 'staleDowngraded should be removed');
     assert.ok(!src.includes('STALE_BINDING_MS'), 'No stale binding constant should remain');
     assert.ok(!src.includes('PANE_STABLE_TICKS'), 'No pane stable ticks constant should remain');
   });
@@ -523,8 +500,8 @@ describe('/watch and /status messaging', () => {
 describe('collectDebugSnapshot', () => {
   it('returns a well-shaped snapshot with all required fields', () => {
     const mockSessionState = {
-      claude: { path: '/tmp/claude.jsonl', resolved: true, offset: 100, lastResponse: 'hello', relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: Date.now(), staleDowngraded: false },
-      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      claude: { path: '/tmp/claude.jsonl', resolved: true, offset: 100, lastResponse: 'hello', relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: Date.now() },
+      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 },
     };
     const mockRouterState = {
       watching: true,
@@ -565,8 +542,8 @@ describe('collectDebugSnapshot', () => {
 
   it('normalizes relayMode to user-facing status', () => {
     const mockSessionState = {
-      claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'session', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
-      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'session', bindingLevel: null, lastSessionActivityAt: 0 },
+      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
     };
     const snapshot = collectDebugSnapshot({
       sessionState: mockSessionState,
@@ -581,8 +558,8 @@ describe('collectDebugSnapshot', () => {
   it('truncates long response previews', () => {
     const longResponse = 'x'.repeat(1000);
     const mockSessionState = {
-      claude: { path: null, resolved: false, offset: 0, lastResponse: longResponse, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
-      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      claude: { path: null, resolved: false, offset: 0, lastResponse: longResponse, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
+      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
     };
     const snapshot = collectDebugSnapshot({
       sessionState: mockSessionState,
@@ -596,8 +573,8 @@ describe('collectDebugSnapshot', () => {
 
   it('includes converse state when active', () => {
     const mockSessionState = {
-      claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
-      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
+      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
     };
     const snapshot = collectDebugSnapshot({
       sessionState: mockSessionState,
@@ -619,8 +596,8 @@ describe('collectDebugSnapshot', () => {
 
   it('does not include pane captures by default', () => {
     const mockSessionState = {
-      claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
-      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
+      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
     };
     const snapshot = collectDebugSnapshot({
       sessionState: mockSessionState,
@@ -633,8 +610,8 @@ describe('collectDebugSnapshot', () => {
 
   it('marks watcher failed status correctly', () => {
     const mockSessionState = {
-      claude: { path: '/tmp/c.jsonl', resolved: true, offset: 0, lastResponse: null, relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: 0, staleDowngraded: false },
-      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+      claude: { path: '/tmp/c.jsonl', resolved: true, offset: 0, lastResponse: null, relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: 0 },
+      codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
     };
     const snapshot = collectDebugSnapshot({
       sessionState: mockSessionState,
@@ -651,8 +628,8 @@ describe('renderDebugReport', () => {
   it('renders a bounded string with key sections and cross-file state', () => {
     const snapshot = collectDebugSnapshot({
       sessionState: {
-        claude: { path: '/tmp/c.jsonl', resolved: true, offset: 42, lastResponse: 'test reply', relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: Date.now(), staleDowngraded: false },
-        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+        claude: { path: '/tmp/c.jsonl', resolved: true, offset: 42, lastResponse: 'test reply', relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: Date.now() },
+        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 },
       },
       routerState: { watching: true, converseState: null, pendingTools: ['codex'], watcherFailed: [], fileWatcherActive: { claude: true, codex: false } },
       bindings: { claude: { status: 'bound', level: 'process', path: '/tmp/c.jsonl', session_id: 'sid-c' }, codex: { status: 'pending' } },
@@ -680,8 +657,8 @@ describe('renderDebugReport', () => {
     process.env.SECRET_KEY = 'super-secret-123';
     const snapshot = collectDebugSnapshot({
       sessionState: {
-        claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
-        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+        claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
+        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
       },
       routerState: { watching: false, converseState: null, pendingTools: [], watcherFailed: [], fileWatcherActive: { claude: false, codex: false } },
       bindings: null,
@@ -696,8 +673,8 @@ describe('renderDebugReport', () => {
     const longCapture = ('A'.repeat(200) + '\n').repeat(100);
     const snapshot = collectDebugSnapshot({
       sessionState: {
-        claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
-        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+        claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
+        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
       },
       routerState: { watching: false, converseState: null, pendingTools: [], watcherFailed: [], fileWatcherActive: { claude: false, codex: false } },
       bindings: null,
@@ -712,8 +689,8 @@ describe('renderDebugReport', () => {
   it('shows watcher failed as unhealthy in report', () => {
     const snapshot = collectDebugSnapshot({
       sessionState: {
-        claude: { path: '/tmp/c.jsonl', resolved: true, offset: 0, lastResponse: null, relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: 0, staleDowngraded: false },
-        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+        claude: { path: '/tmp/c.jsonl', resolved: true, offset: 0, lastResponse: null, relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: 0 },
+        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
       },
       routerState: { watching: true, converseState: null, pendingTools: [], watcherFailed: ['claude'], fileWatcherActive: { claude: false, codex: false } },
       bindings: null,
@@ -727,8 +704,8 @@ describe('renderDebugReport', () => {
   it('renders degraded status instead of pane', () => {
     const snapshot = collectDebugSnapshot({
       sessionState: {
-        claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
-        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0, staleDowngraded: false },
+        claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
+        codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
       },
       routerState: { watching: false, converseState: null, pendingTools: [], watcherFailed: [], fileWatcherActive: { claude: false, codex: false } },
       bindings: { claude: { status: 'degraded' }, codex: { status: 'degraded' } },

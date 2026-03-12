@@ -14,7 +14,7 @@ src/
   launcher/commands.ts          Launch commands: cmdNew, cmdResume, cmdFork, cmdList, cmdDestroy
   launcher/tmux.ts              Sync tmux helpers: layout creation, shellQuote, attach
   launcher/codex-home.ts        CODEX_HOME overlay setup
-  router/commands.ts            Pure parsing + text utilities (parseInput, getNewContent, etc.)
+  router/commands.ts            Pure parsing + text utilities (parseInput, detectMentions)
   router/state.ts               Mutable state, file watchers, polling, rebind logic
   router/controller.ts          Command handlers, output relay, banner, main entry
   bindings/reconciler.ts        Binding reconciler (session discovery + manifest writing)
@@ -94,7 +94,7 @@ Lifecycle states: `pending` → `bound` | `degraded`
 
 Node.js process providing the interactive command interface. Pure manifest consumer for binding state. `router.mjs` is a thin entry wrapper with re-exports; all logic lives in three modules:
 
-- **`src/router/commands.ts`** — Pure parsing and text utilities: `parseInput`, `getNewContent`, `detectMentions`, `cleanCapture`
+- **`src/router/commands.ts`** — Pure parsing and text utilities: `parseInput`, `detectMentions`
 - **`src/router/state.ts`** — Mutable runtime state, file watchers, binding polling, rebind logic, config constants
 - **`src/router/controller.ts`** — Command handlers (`handleInput`), output relay (`handleNewOutput`), banner, `main()` entry
 
@@ -109,7 +109,6 @@ The state→controller callback (`setNewOutputHandler`) breaks the circular depe
 - **Binding-refresh polling**: for tools with `pending` bindings, polls `resolveSessionPath()` periodically and starts file watching when the binding resolves. No pane polling.
 - **Content extraction** (`readIncremental` in `src/relay/session-reader.ts`): incremental JSONL reader tracking byte offset per tool
 - **Completion detection** (`isResponseComplete`): recognizes Claude's `stop_reason: 'end_turn'` / `type: 'result'` and Codex's `payload.type: 'task_complete'`
-- **Content diffing** (`getNewContent`): prefix/suffix structural matching — retained for backward compatibility but not used in automation paths
 - **Mention detection** (`detectMentions`): finds `@claude` / `@codex` in tool output for watch mode
 - **Converse mode**: multi-round turn-based relay with configurable round count, requires both tools bound, no cooldown needed (turn tracking prevents loops)
 - **Watch mode**: monitors session logs for @mentions with 8s per-direction cooldown between auto-relays (claude→codex and codex→claude tracked independently). Reports per-tool state (active/waiting/unavailable)
@@ -131,8 +130,8 @@ The state→controller callback (`setNewOutputHandler`) breaks the circular depe
 - `/destroy` — stop tools, remove all persistent state
 
 **Exported functions** (used by tests — all re-exported through `router.mjs` for backward compatibility):
-- From `src/router/commands.ts`: `parseInput`, `getNewContent`, `detectMentions`, `cleanCapture`
-- From `src/router/state.ts`: `lastAutoRelayTime`, `watcherFailed`, `isWatching`, `downgradeToPane` (no-op), `findRebindCandidate`, `rebindTool`, `stopFileWatchers`, `getRouterState`
+- From `src/router/commands.ts`: `parseInput`, `detectMentions`
+- From `src/router/state.ts`: `lastAutoRelayTime`, `watcherFailed`, `isWatching`, `findRebindCandidate`, `rebindTool`, `stopFileWatchers`, `getRouterState`
 - From `src/router/controller.ts`: `handleNewOutput`
 - From `src/transport/tmux-client.ts`: `shellEscape`, `sendKeys`, `capturePane`, `pasteToPane`, `focusPane`, `killSession`, `detachClient`, `displayMessage`
 - From `src/relay/session-reader.ts`: `sessionState`, `resolveSessionPath`, `readIncremental`, `extractClaudeResponse`, `extractCodexResponse`, `isResponseComplete`, `getLastResponse`, `setDuetMode`
@@ -146,19 +145,17 @@ The state→controller callback (`setNewOutputHandler`) breaks the circular depe
 
 2. **Session-only automation**: `fs.watch()` on session logs gives sub-second relay latency with authoritative, structured output. Automation paths (`/converse`, `/watch`, `@relay`) require session bindings — there is no pane-scraping fallback. `capture-pane` is used only for diagnostics (`/snap`).
 
-3. **Prefix/suffix diffing**: The `getNewContent` algorithm matches common prefix and suffix lines, extracting inserted content. Retained for backward compatibility but not used in automation paths.
+3. **CODEX_HOME isolation**: Each run gets its own Codex home directory with only read-only config symlinked from `~/.codex/`. Mutable state (sessions, SQLite DBs) is never shared. This gives process-level binding certainty.
 
-4. **CODEX_HOME isolation**: Each run gets its own Codex home directory with only read-only config symlinked from `~/.codex/`. Mutable state (sessions, SQLite DBs) is never shared. This gives process-level binding certainty.
+4. **Explicit binding enforcement**: If session binding fails (tool marked `degraded`), automation commands report the tool as unavailable rather than silently falling back to pane scraping. `/rebind` is the manual repair path.
 
-5. **Explicit binding enforcement**: If session binding fails (tool marked `degraded`), automation commands report the tool as unavailable rather than silently falling back to pane scraping. `/rebind` is the manual repair path.
+5. **Durable run state**: Run metadata lives under `~/.local/state/duet/`, not `/tmp`. Each run persists exact session IDs, binding paths, and a durable `CODEX_HOME`. This enables true resume where both Claude and Codex continue their prior conversations.
 
-6. **Durable run state**: Run metadata lives under `~/.local/state/duet/`, not `/tmp`. Each run persists exact session IDs, binding paths, and a durable `CODEX_HOME`. This enables true resume where both Claude and Codex continue their prior conversations.
+6. **EOF-seek on resume**: When the router starts in `resumed` mode, it initializes session readers at the current end of file. This prevents replaying historical messages as new output.
 
-7. **EOF-seek on resume**: When the router starts in `resumed` mode, it initializes session readers at the current end of file. This prevents replaying historical messages as new output.
+7. **Non-destructive quit**: `/quit` stops tools and preserves state for `duet resume`. `/detach` leaves everything running. `/destroy` is the only destructive operation. This separation makes resume predictable.
 
-8. **Non-destructive quit**: `/quit` stops tools and preserves state for `duet resume`. `/detach` leaves everything running. `/destroy` is the only destructive operation. This separation makes resume predictable.
-
-9. **Dist-default runtime**: Production runs built `dist/` artifacts. Source mode (`DUET_USE_SOURCE=1`) is an explicit dev override. Missing-build failures are clear and non-silent. Internal child processes auto-detect mode from `__dirname`.
+8. **Dist-default runtime**: Production runs built `dist/` artifacts. Source mode (`DUET_USE_SOURCE=1`) is an explicit dev override. Missing-build failures are clear and non-silent. Internal child processes auto-detect mode from `__dirname`.
 
 ## Building
 

@@ -5,7 +5,7 @@ import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
-import { createE2eHarness, e2eWaitFor } from '../test-support/e2e-harness.mjs';
+import { createE2eHarness, e2eWaitFor, e2eSleep } from '../test-support/e2e-harness.mjs';
 
 const PROJECT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DUET_SH = join(PROJECT_ROOT, 'duet.sh');
@@ -206,7 +206,6 @@ describe('dist: headless launch', { timeout: 60000 }, () => {
   });
 
   it('watch mode: codex→claude relay works via dist (new JSONL formats)', async () => {
-    const { e2eSleep } = await import('../test-support/e2e-harness.mjs');
     await h.sendToRouter('/watch');
     await e2eSleep(1000);
 

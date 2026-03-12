@@ -7,66 +7,11 @@ import type { ToolName, ParsedInput } from '../types/runtime.js';
 
 // ─── Watch & converse helpers ────────────────────────────────────────────────
 
-export function getNewContent(baseline: string, current: string): string {
-  if (!baseline) return current;
-  if (baseline === current) return '';
-
-  const baseLines = baseline.split('\n');
-  const currLines = current.split('\n');
-
-  let prefixLen = 0;
-  const maxPrefix = Math.min(baseLines.length, currLines.length);
-  while (prefixLen < maxPrefix && baseLines[prefixLen] === currLines[prefixLen]) {
-    prefixLen++;
-  }
-
-  let suffixLen = 0;
-  const maxSuffix = Math.min(baseLines.length - prefixLen, currLines.length - prefixLen);
-  while (suffixLen < maxSuffix &&
-         baseLines[baseLines.length - 1 - suffixLen] === currLines[currLines.length - 1 - suffixLen]) {
-    suffixLen++;
-  }
-
-  if (prefixLen > 0 || suffixLen > 0) {
-    const inserted = currLines.slice(prefixLen, currLines.length - suffixLen);
-    const result = inserted.filter(l => l.trim()).join('\n').trim();
-    if (result) return result;
-  }
-
-  const baseSet = new Set(baseLines.map(l => l.trim()).filter(Boolean));
-  const newLines = currLines.filter(l => l.trim() && !baseSet.has(l.trim()));
-  return newLines.join('\n');
-}
-
 export function detectMentions(text: string): ToolName[] {
   const mentions: ToolName[] = [];
   if (/@claude\b/i.test(text)) mentions.push('claude');
   if (/@codex\b/i.test(text)) mentions.push('codex');
   return mentions;
-}
-
-const BOX_CHARS = /[─│╭╮╰╯┌┐└┘├┤┬┴┼╔╗╚╝║═▔▁█▓▒░]/g;
-const SPINNER = /^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◑◒◓⣾⣽⣻⢿⡿⣟⣯⣷]\s*/;
-
-export function cleanCapture(text: string | null | undefined): string {
-  if (!text) return '';
-  return text
-    .split('\n')
-    .filter(line => {
-      const trimmed = line.trim();
-      if (!trimmed) return false;
-      const withoutBox = trimmed.replace(BOX_CHARS, '').trim();
-      if (withoutBox.length < 3) return false;
-      if (SPINNER.test(trimmed)) return false;
-      if (/^[⏎↩]?\s*(to send|to interrupt|\/help|\/compact|ESC to|Ctrl[+-])/i.test(trimmed)) return false;
-      if (/^(Claude Code|Codex)\s*(v[\d.]|$)/i.test(trimmed)) return false;
-      if (/^[$>]\s*$/.test(trimmed)) return false;
-      return true;
-    })
-    .map(line => line.replace(/^[\s│║▏]+/, '').replace(/[\s│║▕]+$/, '').trim())
-    .filter(Boolean)
-    .join('\n')
-    .trim();
 }
 
 // ─── Input parsing ───────────────────────────────────────────────────────────

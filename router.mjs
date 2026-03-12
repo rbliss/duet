@@ -18,10 +18,10 @@ export {
 
 // ─── Re-exports: router modules (new) ───────────────────────────────────────
 
-export { parseInput, getNewContent, detectMentions, cleanCapture } from './src/router/commands.js';
+export { parseInput, detectMentions } from './src/router/commands.js';
 export {
   lastAutoRelayTime, watcherFailed,
-  isWatching, downgradeToPane, findRebindCandidate, rebindTool,
+  isWatching, findRebindCandidate, rebindTool,
   stopFileWatchers, getRouterState,
 } from './src/router/state.js';
 export { handleNewOutput } from './src/router/controller.js';

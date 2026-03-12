@@ -27,6 +27,5 @@ export function resetSessionState() {
     sessionState[tool].relayMode = 'pending';
     sessionState[tool].bindingLevel = null;
     sessionState[tool].lastSessionActivityAt = 0;
-    sessionState[tool].staleDowngraded = false;
   }
 }
