@@ -42,16 +42,29 @@ export function getTermSize(): TermSize {
   return { cols, lines };
 }
 
+export function getTmuxWindowSize(tmux: TmuxRunner, session: string): TermSize {
+  const width = parseInt(tmux('display-message', '-t', session, '-p', '#{window_width}'), 10);
+  const height = parseInt(tmux('display-message', '-t', session, '-p', '#{window_height}'), 10);
+  return {
+    cols: (width && !isNaN(width)) ? width : 120,
+    lines: (height && !isNaN(height)) ? height : 40,
+  };
+}
+
 export function createTmuxLayout(tmux: TmuxRunner, session: string): TmuxLayout {
   try { tmux('kill-session', '-t', session); } catch {}
 
-  const { cols, lines } = getTermSize();
+  const hintSize = getTermSize();
+  const claudePane = tmux('new-session', '-d', '-s', session,
+    '-x', String(hintSize.cols), '-y', String(hintSize.lines),
+    '-P', '-F', '#{pane_id}');
+
+  // Query actual window dimensions — tmux may override our -x/-y hint
+  // (e.g., shared server sizes new sessions to the largest attached client)
+  const { cols, lines } = getTmuxWindowSize(tmux, session);
   const routerHeight = Math.floor(lines * 30 / 100);
   const codexWidth = Math.ceil((cols - 1) / 2);
 
-  const claudePane = tmux('new-session', '-d', '-s', session,
-    '-x', String(cols), '-y', String(lines),
-    '-P', '-F', '#{pane_id}');
   const routerPane = tmux('split-window', '-v', '-t', claudePane,
     '-l', String(routerHeight), '-P', '-F', '#{pane_id}');
   const codexPane = tmux('split-window', '-h', '-t', claudePane,

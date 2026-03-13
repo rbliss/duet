@@ -198,4 +198,4 @@ npm run verify         # typecheck + build + test (full release check)
 - **Session binding required for automation**: `/converse`, `/watch`, and `@relay` require active session bindings. If binding fails (tool marked as `degraded`), these commands report the tool as unavailable. Use `/status` to check binding state.
 - **Single-line input**: `@claude` and `@codex` send a single line. For multi-line prompts, use `/focus` to interact natively.
 - **In-tool `/resume`**: Using Claude's built-in `/resume` command inside a live Duet session invalidates the router's session binding. Use `/rebind claude` to re-discover the new session file, or prefer `duet.sh resume` / `duet.sh fork` instead.
-- **tmux 3.4**: The `split-window -p` (percentage) flag fails on detached sessions. Duet uses `-l` (absolute lines/columns) as a workaround.
+- **tmux 3.4**: The `split-window -p` (percentage) flag fails on detached sessions. Duet uses `-l` (absolute lines/columns) with dimensions queried from the actual tmux window after session creation.
