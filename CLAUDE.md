@@ -50,8 +50,8 @@ Bash shim that execs `node dist/cli/duet.js` (or `node --import tsx/esm src/cli/
 
 **Subcommands** (dispatched by `src/cli/duet.ts`):
 - `duet [workdir]` — attach to active run for workspace, or create new
-- `duet resume [run-id|last]` — resume a stopped run with native CLI resume
-- `duet fork [run-id|last]` — fork from an existing run
+- `duet resume [run-id]` — resume a stopped run; defaults to most recent run for current workspace
+- `duet fork [run-id]` — fork from an existing run; defaults to most recent run for current workspace
 - `duet list` — show all runs with status
 - `duet destroy <run-id>` — permanently remove a run and its state
 
@@ -211,9 +211,9 @@ Key test patterns:
 
 **Launch duet (dev)**: `DUET_USE_SOURCE=1 ~/duet/duet.sh [workdir]`
 
-**Resume**: `~/duet/duet.sh resume [run-id|last]`
+**Resume**: `~/duet/duet.sh resume [run-id]` (defaults to most recent run for current workspace)
 
-**Fork**: `~/duet/duet.sh fork [run-id|last]`
+**Fork**: `~/duet/duet.sh fork [run-id]` (defaults to most recent run for current workspace)
 
 **List runs**: `~/duet/duet.sh list`
 

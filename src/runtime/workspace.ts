@@ -92,6 +92,37 @@ export function findActiveRun(cwd: string, runsDir: string, workspacesDir: strin
   }
 }
 
+// ─── findLatestWorkspaceRun ──────────────────────────────────────────────────
+// Find the most recent run for a workspace by updated_at, regardless of status.
+
+export function findLatestWorkspaceRun(cwd: string, runsDir: string, workspacesDir: string): string | null {
+  const hash = cwdHash(cwd);
+  const idxPath = join(workspacesDir, `${hash}.json`);
+  if (!existsSync(idxPath)) return null;
+
+  try {
+    const idx: WorkspaceIndex = JSON.parse(readFileSync(idxPath, 'utf8'));
+    if (!idx.runs || idx.runs.length === 0) return null;
+
+    let latest: string | null = null;
+    let latestTime = '';
+    for (const rid of idx.runs) {
+      const rj = join(runsDir, rid, 'run.json');
+      try {
+        const runCwd = readRunField(rj, 'cwd');
+        if (runCwd !== cwd) continue;
+        const t = readRunField(rj, 'updated_at');
+        if (t && (!latestTime || t > latestTime)) {
+          latestTime = t;
+          latest = rid;
+        }
+      } catch {}
+    }
+    return latest;
+  } catch {}
+  return null;
+}
+
 // ─── updateWorkspaceIndex ────────────────────────────────────────────────────
 // Matches: update_workspace_index() in duet.sh.
 

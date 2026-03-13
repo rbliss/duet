@@ -684,3 +684,88 @@ describe('setupCodexHome isolation', () => {
     assert.ok(existsSync(join(codexHome, 'auth.json')));
   });
 });
+
+// ─── Workspace-aware resume and fork ──────────────────────────────────────────
+
+describe('workspace-aware resume and fork', () => {
+  const testDir = '/tmp/duet-test-ws-resume-' + process.pid;
+
+  before(() => mkdirSync(testDir, { recursive: true }));
+  after(() => rmSync(testDir, { recursive: true, force: true }));
+
+  it('cmdResume uses findLatestWorkspaceRun for default case', () => {
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.ts', 'utf8');
+    const resumeFunc = commands.slice(
+      commands.indexOf('export function cmdResume'),
+      commands.indexOf('export function cmdFork')
+    );
+    assert.ok(resumeFunc.includes('findLatestWorkspaceRun'), 'cmdResume should use findLatestWorkspaceRun');
+    assert.ok(!resumeFunc.includes("resolveRunId(ref || 'last'"), 'cmdResume should not use global resolveRunId for default case');
+  });
+
+  it('cmdFork uses findLatestWorkspaceRun for default case', () => {
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.ts', 'utf8');
+    const forkFunc = commands.slice(
+      commands.indexOf('export function cmdFork'),
+      commands.indexOf('export function cmdList')
+    );
+    assert.ok(forkFunc.includes('findLatestWorkspaceRun'), 'cmdFork should use findLatestWorkspaceRun');
+    assert.ok(!forkFunc.includes("resolveRunId(ref || 'last'"), 'cmdFork should not use global resolveRunId for default case');
+  });
+
+  it('explicit resume <id> still uses global resolveRunId', () => {
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.ts', 'utf8');
+    const resumeFunc = commands.slice(
+      commands.indexOf('export function cmdResume'),
+      commands.indexOf('export function cmdFork')
+    );
+    assert.ok(resumeFunc.includes('resolveRunId(ref'), 'explicit ref should use global resolveRunId');
+  });
+
+  it('explicit fork <id> still uses global resolveRunId', () => {
+    const commands = readFileSync('/home/claude/duet/src/launcher/commands.ts', 'utf8');
+    const forkFunc = commands.slice(
+      commands.indexOf('export function cmdFork'),
+      commands.indexOf('export function cmdList')
+    );
+    assert.ok(forkFunc.includes('resolveRunId(ref'), 'explicit ref should use global resolveRunId');
+  });
+
+  it('resume errors clearly for workspace with no runs', () => {
+    try {
+      execSync(
+        `node /home/claude/duet/dist/cli/duet.js resume`,
+        {
+          encoding: 'utf8',
+          cwd: '/var',
+          env: { ...process.env, DUET_BASE: testDir, DUET_NO_ATTACH: '1' },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }
+      );
+      assert.fail('should have exited non-zero');
+    } catch (e) {
+      assert.ok(e.status !== 0, `expected non-zero exit, got ${e.status}`);
+      const output = (e.stderr || '') + (e.stdout || '');
+      assert.ok(output.includes('no runs found for workspace'), `expected workspace error, got: ${output}`);
+    }
+  });
+
+  it('fork errors clearly for workspace with no runs', () => {
+    try {
+      execSync(
+        `node /home/claude/duet/dist/cli/duet.js fork`,
+        {
+          encoding: 'utf8',
+          cwd: '/var',
+          env: { ...process.env, DUET_BASE: testDir, DUET_NO_ATTACH: '1' },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }
+      );
+      assert.fail('should have exited non-zero');
+    } catch (e) {
+      assert.ok(e.status !== 0, `expected non-zero exit, got ${e.status}`);
+      const output = (e.stderr || '') + (e.stdout || '');
+      assert.ok(output.includes('no runs found for workspace'), `expected workspace error, got: ${output}`);
+    }
+  });
+});

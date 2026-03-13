@@ -10,6 +10,7 @@ import {
   readRunField,
   writeRunJson,
   findActiveRun,
+  findLatestWorkspaceRun,
   updateWorkspaceIndex,
   resolveRunId,
   buildToolPrompt,
@@ -158,6 +159,97 @@ describe('findActiveRun', () => {
     updateWorkspaceIndex(cwd, runId, 'true', wsDir);
 
     assert.equal(findActiveRun(cwd, runsDir, wsDir), null);
+  });
+});
+
+// ─── findLatestWorkspaceRun ──────────────────────────────────────────────────
+
+describe('findLatestWorkspaceRun', () => {
+  const testDir = '/tmp/duet-test-latest-ws-' + process.pid;
+  const runsDir = join(testDir, 'runs');
+  const wsDir = join(testDir, 'workspaces');
+  const cwdA = '/home/test/workspace-a';
+  const cwdB = '/home/test/workspace-b';
+
+  before(() => {
+    mkdirSync(runsDir, { recursive: true });
+    mkdirSync(wsDir, { recursive: true });
+  });
+  after(() => rmSync(testDir, { recursive: true, force: true }));
+
+  it('returns null when no workspace index exists', () => {
+    assert.equal(findLatestWorkspaceRun('/nonexistent/path', runsDir, wsDir), null);
+  });
+
+  it('returns the most recent run for the workspace', () => {
+    // Create two runs for workspace A with different updated_at
+    const oldRun = 'aaaa-old-run';
+    const newRun = 'aaaa-new-run';
+    mkdirSync(join(runsDir, oldRun), { recursive: true });
+    mkdirSync(join(runsDir, newRun), { recursive: true });
+    writeRunJson(join(runsDir, oldRun, 'run.json'), {
+      run_id: oldRun, cwd: cwdA, updated_at: '2026-03-01T00:00:00Z', status: 'stopped',
+    });
+    writeRunJson(join(runsDir, newRun, 'run.json'), {
+      run_id: newRun, cwd: cwdA, updated_at: '2026-03-10T00:00:00Z', status: 'stopped',
+    });
+    updateWorkspaceIndex(cwdA, oldRun, false, wsDir);
+    updateWorkspaceIndex(cwdA, newRun, false, wsDir);
+
+    assert.equal(findLatestWorkspaceRun(cwdA, runsDir, wsDir), newRun);
+  });
+
+  it('ignores runs from other workspaces', () => {
+    // Create a newer run in workspace B
+    const bRun = 'bbbb-newest-global';
+    mkdirSync(join(runsDir, bRun), { recursive: true });
+    writeRunJson(join(runsDir, bRun, 'run.json'), {
+      run_id: bRun, cwd: cwdB, updated_at: '2026-03-15T00:00:00Z', status: 'stopped',
+    });
+    updateWorkspaceIndex(cwdB, bRun, false, wsDir);
+
+    // workspace A should still return its own latest, not B's newer run
+    assert.equal(findLatestWorkspaceRun(cwdA, runsDir, wsDir), 'aaaa-new-run');
+    assert.equal(findLatestWorkspaceRun(cwdB, runsDir, wsDir), bRun);
+  });
+
+  it('ignores stale index entries whose run.json.cwd does not match', () => {
+    // Simulate a corrupted workspace index: workspace A's index contains
+    // a newer run that actually belongs to workspace B
+    const staleRun = 'aaaa-stale-foreign';
+    mkdirSync(join(runsDir, staleRun), { recursive: true });
+    writeRunJson(join(runsDir, staleRun, 'run.json'), {
+      run_id: staleRun, cwd: cwdB, updated_at: '2026-03-20T00:00:00Z', status: 'stopped',
+    });
+    // Manually inject into workspace A's index
+    updateWorkspaceIndex(cwdA, staleRun, false, wsDir);
+
+    // Should return A's own run, not the foreign one despite it being newer
+    assert.equal(findLatestWorkspaceRun(cwdA, runsDir, wsDir), 'aaaa-new-run');
+  });
+
+  it('ignores index entries whose run.json is missing', () => {
+    const cwdC = '/home/test/workspace-c';
+    const goodRun = 'cccc-good';
+    const ghostRun = 'cccc-ghost';
+    mkdirSync(join(runsDir, goodRun), { recursive: true });
+    writeRunJson(join(runsDir, goodRun, 'run.json'), {
+      run_id: goodRun, cwd: cwdC, updated_at: '2026-03-05T00:00:00Z', status: 'stopped',
+    });
+    // Add ghost run to workspace index but don't create its run.json
+    updateWorkspaceIndex(cwdC, goodRun, false, wsDir);
+    updateWorkspaceIndex(cwdC, ghostRun, false, wsDir);
+
+    assert.equal(findLatestWorkspaceRun(cwdC, runsDir, wsDir), goodRun);
+  });
+
+  it('returns null when workspace has empty runs list', () => {
+    const cwdD = '/home/test/workspace-d';
+    const hash = cwdHash(cwdD);
+    mkdirSync(wsDir, { recursive: true });
+    writeFileSync(join(wsDir, `${hash}.json`), JSON.stringify({ cwd: cwdD, runs: [], active: null }));
+
+    assert.equal(findLatestWorkspaceRun(cwdD, runsDir, wsDir), null);
   });
 });
 

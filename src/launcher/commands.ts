@@ -24,6 +24,7 @@ import {
   readRunField,
   writeRunJson,
   findActiveRun,
+  findLatestWorkspaceRun,
   updateWorkspaceIndex,
   resolveRunId,
   buildToolPrompt,
@@ -189,9 +190,22 @@ export function cmdResume(ref: string | undefined): void {
   ensureDirs(cfg);
   const tmux = createTmuxRunner(cfg.socket);
 
-  const { runId, error } = resolveRunId(ref || 'last', cfg.runsDir);
-  if (error) { console.error(`Error: ${error}`); process.exit(1); }
-  if (!runId) { console.error('Error: no run found to resume'); process.exit(1); }
+  let runId: string;
+  if (!ref || ref === 'last') {
+    const workdir = canonicalizePath(process.cwd());
+    const wsRun = findLatestWorkspaceRun(workdir, cfg.runsDir, cfg.workspacesDir);
+    if (!wsRun) {
+      console.error(`Error: no runs found for workspace ${workdir}`);
+      console.error("Use 'duet list' to see all runs, or specify a run ID.");
+      process.exit(1);
+    }
+    runId = wsRun;
+  } else {
+    const { runId: resolved, error } = resolveRunId(ref, cfg.runsDir);
+    if (error) { console.error(`Error: ${error}`); process.exit(1); }
+    if (!resolved) { console.error('Error: no run found to resume'); process.exit(1); }
+    runId = resolved;
+  }
 
   const runDir = join(cfg.runsDir, runId);
   const runJson = join(runDir, 'run.json');
@@ -291,9 +305,22 @@ export function cmdFork(ref: string | undefined): void {
   ensureDirs(cfg);
   const tmux = createTmuxRunner(cfg.socket);
 
-  const { runId, error } = resolveRunId(ref || 'last', cfg.runsDir);
-  if (error) { console.error(`Error: ${error}`); process.exit(1); }
-  if (!runId) { console.error('Error: no run found to fork'); process.exit(1); }
+  let runId: string;
+  if (!ref || ref === 'last') {
+    const workdir = canonicalizePath(process.cwd());
+    const wsRun = findLatestWorkspaceRun(workdir, cfg.runsDir, cfg.workspacesDir);
+    if (!wsRun) {
+      console.error(`Error: no runs found for workspace ${workdir}`);
+      console.error("Use 'duet list' to see all runs, or specify a run ID.");
+      process.exit(1);
+    }
+    runId = wsRun;
+  } else {
+    const { runId: resolved, error } = resolveRunId(ref, cfg.runsDir);
+    if (error) { console.error(`Error: ${error}`); process.exit(1); }
+    if (!resolved) { console.error('Error: no run found to fork'); process.exit(1); }
+    runId = resolved;
+  }
 
   const sourceJson = join(cfg.runsDir, runId, 'run.json');
   if (!existsSync(sourceJson)) { console.error('Error: source run manifest not found'); process.exit(1); }

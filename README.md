@@ -34,7 +34,8 @@ npm run build          # compile TypeScript to dist/
 
 ```bash
 ./duet.sh              # launch (uses built dist/ by default)
-./duet.sh resume       # resume last stopped run
+./duet.sh resume       # resume most recent run for current directory
+./duet.sh resume ID    # resume a specific run (global lookup)
 ./duet.sh list         # show all runs
 ./duet.sh destroy ID   # remove a run
 ```
