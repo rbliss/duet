@@ -17,6 +17,7 @@ src/
   router/commands.ts            Pure parsing + text utilities (parseInput, detectMentions)
   router/state.ts               Mutable state, file watchers, polling, rebind logic
   router/controller.ts          Command handlers, output relay, banner, main entry
+  bindings/discovery.ts          Shared session file discovery helpers (used by reconciler + router)
   bindings/reconciler.ts        Binding reconciler (session discovery + manifest writing)
   runtime/workspace.ts          Workspace and run management helpers
   runtime/entry-paths.ts        Source-vs-dist entrypoint resolver
@@ -86,9 +87,10 @@ Runs as a background process after launch. Sole authority for session discovery 
 - Codex binding (fallback): if isolation produces nothing, scans `~/.codex/sessions/` for new files matching `$WORKDIR` via `session_meta.cwd`
 - Extracts Codex session ID from `payload.id` in session metadata
 - Updates the manifest incrementally as each tool binds
-- Marks unfound tools as `degraded` when the deadline expires
+- Fresh tools (no resume expectation) stay `pending` after deadline — router handles late discovery
+- Resume tools (RESUME_* env vars set) are marked `degraded` if the expected file is missing
 
-Lifecycle states: `pending` → `bound` | `degraded`
+Lifecycle states: `pending` → `bound` | `degraded` (degraded only for resume failures)
 
 ### Router (router.mjs → src/router/)
 
@@ -106,7 +108,7 @@ The state→controller callback (`setNewOutputHandler`) breaks the circular depe
 - **Relay transport** (session-only): `fs.watch()` on JSONL log files, debounced (200ms with completion signal, 800ms without). No pane-scraping fallback for automation.
 - **Binding resolution** (`resolveSessionPath` in `src/relay/session-reader.ts`): reads `bindings.json`, caches when all tools are final, re-reads while any tool is `pending`. On resume mode, seeks reader offset to EOF to skip history.
 - **Run manifest management** (`updateRunJson` in `src/runtime/run-store.ts`): updates `run.json` with binding paths, session IDs, and status changes
-- **Binding-refresh polling**: for tools with `pending` bindings, polls `resolveSessionPath()` periodically and starts file watching when the binding resolves. No pane polling.
+- **Binding-refresh polling**: for tools with `pending` bindings, polls `resolveSessionPath()` periodically and starts file watching when the binding resolves. For tools still pending after the reconciler exits, actively discovers session files using `src/bindings/discovery.ts` helpers and auto-binds via `rebindTool()`. No pane polling.
 - **Content extraction** (`readIncremental` in `src/relay/session-reader.ts`): incremental JSONL reader tracking byte offset per tool
 - **Completion detection** (`isResponseComplete`): recognizes Claude's `stop_reason: 'end_turn'` / `type: 'result'` and Codex's `payload.type: 'task_complete'`
 - **Mention detection** (`detectMentions`): finds `@claude` / `@codex` in tool output for watch mode
@@ -141,7 +143,7 @@ The state→controller callback (`setNewOutputHandler`) breaks the circular depe
 
 ## Key design decisions
 
-1. **Single binding authority**: `src/bindings/reconciler.ts` owns all session discovery. `bind-sessions.sh` is a thin shim that execs the Node module. The router only consumes the manifest. This avoids split-authority bugs where two components race to find session files.
+1. **Shared discovery, two-phase binding**: `src/bindings/discovery.ts` provides shared session file discovery helpers. The reconciler runs first (background process) and handles the initial binding window. For tools that stay `pending` (e.g., Codex doesn't create a session file until first message), the router actively discovers session files and auto-binds via `rebindTool()`. Both paths persist to `bindings.json` and `run.json`.
 
 2. **Session-only automation**: `fs.watch()` on session logs gives sub-second relay latency with authoritative, structured output. Automation paths (`/converse`, `/watch`, `@relay`) require session bindings — there is no pane-scraping fallback. `capture-pane` is used only for diagnostics (`/snap`).
 

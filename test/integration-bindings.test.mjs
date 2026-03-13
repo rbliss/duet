@@ -4,7 +4,8 @@ import { execSync, spawn } from 'child_process';
 import { writeFileSync, mkdirSync, rmSync, readFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
 
-import { sessionState, resolveSessionPath, setStateDir, setDuetMode, setRunDir, getClaudeLastResponse, getCodexLastResponse, updateRunJson } from '../router.mjs';
+import { sessionState, resolveSessionPath, setStateDir, setDuetMode, setRunDir, getClaudeLastResponse, getCodexLastResponse, updateRunJson, rebindTool, stopFileWatchers } from '../router.mjs';
+import { discoverClaudeSession, discoverCodexSession } from '../src/bindings/discovery.ts';
 import { sanitizedEnv } from '../test-support/env.mjs';
 
 // ─── Integration Tests: end-to-end session binding (bindings.json manifest) ──
@@ -342,16 +343,31 @@ describe('launcher binding contract', () => {
     assert.equal(bindings.codex.level, 'process');
   });
 
-  it('degrades tools when no files appear before deadline', () => {
+  it('fresh tools stay pending when no files appear before deadline', () => {
     cleanState();
 
     runBind({ CLAUDE_SESSION_ID: 'nonexistent-uuid' });
 
     const bindings = JSON.parse(execSync(`cat ${join(stateDir, 'bindings.json')}`, { encoding: 'utf8' }));
-    assert.equal(bindings.claude.status, 'degraded');
+    assert.equal(bindings.claude.status, 'pending');
     assert.equal(bindings.claude.path, null);
-    assert.equal(bindings.codex.status, 'degraded');
+    assert.equal(bindings.codex.status, 'pending');
     assert.equal(bindings.codex.path, null);
+  });
+
+  it('resume tools degrade when expected files are missing', () => {
+    cleanState();
+
+    runBind({
+      CLAUDE_SESSION_ID: 'nonexistent-uuid',
+      RESUME_CLAUDE_PATH: '/tmp/nonexistent-claude.jsonl',
+      RESUME_CODEX_PATH: '/tmp/nonexistent-codex.jsonl',
+      RESUME_CODEX_SESSION_ID: 'expected-id',
+    });
+
+    const bindings = JSON.parse(execSync(`cat ${join(stateDir, 'bindings.json')}`, { encoding: 'utf8' }));
+    assert.equal(bindings.claude.status, 'degraded');
+    assert.equal(bindings.codex.status, 'degraded');
   });
 
   it('binds both tools when both files exist', () => {
@@ -400,7 +416,7 @@ describe('launcher binding contract', () => {
     assert.equal(bindings.codex.level, 'workspace');
   });
 
-  it('fallback ignores global codex sessions with wrong cwd', () => {
+  it('fallback ignores global codex sessions with wrong cwd (stays pending for fresh)', () => {
     cleanState();
     const globalFile = join(globalCodexSessions, 'wrong-cwd.jsonl');
     const meta = JSON.stringify({ type: 'session_meta', payload: { id: 'wrong', cwd: '/other/dir' } });
@@ -410,7 +426,7 @@ describe('launcher binding contract', () => {
     runBind({ CLAUDE_SESSION_ID: 'nonexistent' });
 
     const bindings = JSON.parse(execSync(`cat ${join(stateDir, 'bindings.json')}`, { encoding: 'utf8' }));
-    assert.equal(bindings.codex.status, 'degraded');
+    assert.equal(bindings.codex.status, 'pending');
   });
 
   it('prefers isolated store over global fallback', () => {
@@ -872,5 +888,103 @@ describe('updateRunJson', () => {
   it('does nothing when run dir is null', () => {
     setRunDir(null);
     updateRunJson({ status: 'should-not-write' });
+  });
+});
+
+// ─── Late discovery: router-side session file discovery ───────────────────────
+
+describe('late discovery helpers', () => {
+  const testDir = '/tmp/duet-test-late-disc-' + process.pid;
+  const claudeProjects = join(testDir, 'claude-projects');
+  const codexSessions = join(testDir, 'codex-sessions');
+
+  before(() => {
+    mkdirSync(join(claudeProjects, 'subdir'), { recursive: true });
+    mkdirSync(join(codexSessions, '2026', '03', '13'), { recursive: true });
+  });
+
+  after(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('discoverClaudeSession finds UUID-named file in projects tree', () => {
+    const uuid = 'disc-claude-' + Date.now();
+    const file = join(claudeProjects, 'subdir', `${uuid}.jsonl`);
+    writeFileSync(file, '{}');
+
+    assert.equal(discoverClaudeSession(uuid, claudeProjects), file);
+  });
+
+  it('discoverClaudeSession returns null when no match', () => {
+    assert.equal(discoverClaudeSession('nonexistent-' + Date.now(), claudeProjects), null);
+  });
+
+  it('discoverCodexSession finds first jsonl in isolated dir', () => {
+    const file = join(codexSessions, '2026', '03', '13', 'rollout-test.jsonl');
+    writeFileSync(file, '{}');
+
+    const found = discoverCodexSession(codexSessions);
+    assert.ok(found, 'should find a session file');
+    assert.ok(found.endsWith('.jsonl'));
+  });
+
+  it('discoverCodexSession returns null for empty dir', () => {
+    const emptyDir = join(testDir, 'empty-sessions');
+    mkdirSync(emptyDir, { recursive: true });
+    assert.equal(discoverCodexSession(emptyDir), null);
+  });
+});
+
+// ─── Late discovery: rebindTool integrates with pending state ─────────────────
+
+describe('late discovery via rebindTool', () => {
+  const testDir = '/tmp/duet-test-late-rebind-' + process.pid;
+  const stateDir = join(testDir, 'state');
+  const sessionDir = join(testDir, 'sessions');
+  const codexLog = join(sessionDir, 'late-codex.jsonl');
+
+  let origClaude, origCodex;
+
+  before(() => {
+    origClaude = { ...sessionState.claude };
+    origCodex = { ...sessionState.codex };
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true });
+  });
+
+  after(() => {
+    stopFileWatchers();
+    setStateDir(null);
+    setRunDir(null);
+    Object.assign(sessionState.claude, origClaude);
+    Object.assign(sessionState.codex, origCodex);
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('rebindTool transitions pending codex to session mode', async () => {
+    setStateDir(stateDir);
+    setRunDir(stateDir);
+    writeFileSync(join(stateDir, 'run.json'), JSON.stringify({ run_id: 'test', status: 'active' }));
+
+    // Start as pending (no bindings.json bound entry)
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+
+    // Write a late session file
+    const meta = JSON.stringify({ type: 'session_meta', payload: { id: 'late-codex-id', cwd: '/test' } });
+    writeFileSync(codexLog, meta + '\n');
+
+    // Discover and rebind
+    const result = await rebindTool('codex', codexLog);
+    assert.equal(result.newPath, codexLog);
+    assert.equal(result.newSid, 'late-codex-id');
+
+    assert.equal(sessionState.codex.relayMode, 'session');
+    assert.equal(sessionState.codex.path, codexLog);
+    assert.equal(sessionState.codex.resolved, true);
+
+    // run.json should be updated
+    const runData = JSON.parse(readFileSync(join(stateDir, 'run.json'), 'utf8'));
+    assert.equal(runData.codex.binding_path, codexLog);
+    assert.equal(runData.codex.session_id, 'late-codex-id');
   });
 });

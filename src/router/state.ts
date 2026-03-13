@@ -20,6 +20,8 @@ import {
 
 const sessionState = _sessionState as SessionStateMap;
 import { updateRunJson } from '../runtime/run-store.js';
+import { updateBinding } from '../runtime/bindings-store.js';
+import { discoverClaudeSession, discoverCodexSession } from '../bindings/discovery.js';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -188,6 +190,34 @@ function scheduleBindingPoll(): void {
   }, BINDING_POLL_MS);
 }
 
+function tryLateDiscovery(tool: ToolName): void {
+  const runJson = readRunJson();
+  if (!runJson) return;
+
+  let candidatePath: string | null = null;
+
+  if (tool === 'claude') {
+    const claudeObj = runJson.claude as Record<string, string> | undefined;
+    const sessionId = claudeObj?.session_id;
+    if (!sessionId) return;
+    const claudeProjects = join(process.env.HOME || '', '.claude/projects');
+    candidatePath = discoverClaudeSession(sessionId, claudeProjects);
+  } else {
+    const codexHome = runJson.codex_home as string | undefined;
+    if (!codexHome) return;
+    const codexSessions = join(codexHome, 'sessions');
+    candidatePath = discoverCodexSession(codexSessions);
+  }
+
+  if (candidatePath) {
+    rebindTool(tool, candidatePath).then(() => {
+      pendingTools.delete(tool);
+      console.log(`\n${C.green}${tool}: session discovered — watcher active${C.reset}`);
+      prompt();
+    }).catch(() => {});
+  }
+}
+
 function pollBindings(): void {
   for (const name of [...pendingTools]) {
     resolveSessionPath(name as ToolName);
@@ -201,8 +231,11 @@ function pollBindings(): void {
         console.log(`\n${C.red}${name}: binding resolved but watcher failed — automation inactive${C.reset}`);
       }
       prompt();
-    } else if (st.relayMode !== 'pending') {
-      // Degraded — binder gave up
+    } else if (st.relayMode === 'pending') {
+      // Still pending — try active late discovery (session file may have appeared)
+      tryLateDiscovery(name as ToolName);
+    } else {
+      // Degraded — binder gave up (resume failure)
       pendingTools.delete(name);
       console.log(`\n${C.yellow}${name}: binding degraded — automation unavailable${C.reset}`);
       prompt();
@@ -305,9 +338,19 @@ export async function rebindTool(tool: ToolName, newPath: string): Promise<{ old
     watcherFailed.delete(tool);
   }
 
-  const updates: Record<string, string> = { [`${tool}.binding_path`]: newPath, updated_at: new Date().toISOString() };
+  const now = new Date().toISOString();
+  const updates: Record<string, string> = { [`${tool}.binding_path`]: newPath, updated_at: now };
   if (newSid) updates[`${tool}.session_id`] = newSid;
   updateRunJson(updates);
+
+  // Persist binding to bindings.json so it survives router restarts
+  updateBinding(tool, {
+    path: newPath,
+    level: 'process',
+    status: 'bound',
+    confirmedAt: now,
+    session_id: newSid,
+  });
 
   return { oldPath, newPath, newSid };
 }

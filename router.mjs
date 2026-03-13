@@ -7,7 +7,7 @@
 
 export { shellEscape, sendKeys, pasteToPane, capturePane, focusPane } from './src/transport/tmux-client.js';
 export { setRunDir, updateRunJson } from './src/runtime/run-store.js';
-export { STATE_DIR, setStateDir } from './src/runtime/bindings-store.js';
+export { STATE_DIR, setStateDir, updateBinding } from './src/runtime/bindings-store.js';
 export { collectDebugSnapshot, renderDebugReport } from './src/debug/debug-report.js';
 export {
   sessionState, resolveSessionPath, readIncremental,

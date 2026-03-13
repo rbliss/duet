@@ -11,10 +11,11 @@
  */
 
 import type { ReconcilerEnv, ReconcilerToolState } from '../types/runtime.js';
-import { existsSync, readFileSync, writeFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join, basename } from 'path';
 import { nowIso } from '../runtime/workspace.js';
 import { extractCodexSessionId } from '../relay/session-reader.js';
+import { findJsonlFiles } from './discovery.js';
 
 // ─── Environment contract ────────────────────────────────────────────────────
 
@@ -59,33 +60,6 @@ function extractCodexCwd(filePath: string): string {
     return (data.payload && data.payload.cwd) || '';
   } catch {
     return '';
-  }
-}
-
-function findJsonlFiles(dir: string): string[] {
-  const results: string[] = [];
-  try {
-    _walkDir(dir, results);
-  } catch {
-    // Directory may not exist
-  }
-  return results;
-}
-
-function _walkDir(dir: string, results: string[]): void {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    const fullPath = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      _walkDir(fullPath, results);
-    } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-      results.push(fullPath);
-    }
   }
 }
 
@@ -222,12 +196,14 @@ export async function reconcile(envOverride?: ReconcilerEnv): Promise<void> {
     }
   }
 
-  // Mark remaining unfound tools as degraded
+  // Mark remaining unfound tools:
+  // - degraded if resume expected a prior binding (resume path was set)
+  // - stay pending if fresh launch (tool may create session later)
   if (!claudeBound) {
-    state.claude.status = 'degraded';
+    state.claude.status = env.resumeClaudePath ? 'degraded' : 'pending';
   }
   if (!codexBound) {
-    state.codex.status = 'degraded';
+    state.codex.status = (env.resumeCodexPath || env.resumeCodexSessionId) ? 'degraded' : 'pending';
   }
   writeManifest(state, env.stateDir);
 }

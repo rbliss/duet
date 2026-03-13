@@ -8,6 +8,8 @@
 //
 // Test knobs (env vars):
 //   FAKE_CODEX_BIND_DELAY_MS  - delay before creating session log (tests late binding)
+//   FAKE_CODEX_LAZY_SESSION   - if '1', defer session log creation until first stdin input
+//                                (simulates Codex v0.114.0+ lazy session behavior)
 //   DUET_INBOX_DIR            - where to write inbox log (overrides DUET_RUN_DIR)
 //   FAKE_PASTE_SETTLE_MS      - if >0 and stdin is TTY, enter raw/TUI mode that
 //                                ignores Enter presses arriving within this many ms
@@ -103,19 +105,38 @@ function writeResponseNewFormat(text) {
   }) + '\n');
 }
 
-// Delayed binding: wait before creating session log
-const bindDelay = parseInt(process.env.FAKE_CODEX_BIND_DELAY_MS || '0', 10);
-if (bindDelay > 0) {
-  console.log(`fake-codex: delaying session log by ${bindDelay}ms`);
-  setTimeout(writeSessionInit, bindDelay);
-} else {
+// Session creation modes:
+//   - lazy: defer session file until first stdin input (FAKE_CODEX_LAZY_SESSION=1)
+//   - delayed: create after a fixed delay (FAKE_CODEX_BIND_DELAY_MS)
+//   - immediate: create now (default)
+const lazySession = process.env.FAKE_CODEX_LAZY_SESSION === '1';
+let sessionInitialized = false;
+
+function ensureSessionInit() {
+  if (sessionInitialized) return;
+  sessionInitialized = true;
   writeSessionInit();
+}
+
+if (lazySession) {
+  console.log('fake-codex: lazy session mode — will create session log on first input');
+} else {
+  const bindDelay = parseInt(process.env.FAKE_CODEX_BIND_DELAY_MS || '0', 10);
+  if (bindDelay > 0) {
+    console.log(`fake-codex: delaying session log by ${bindDelay}ms`);
+    setTimeout(ensureSessionInit, bindDelay);
+  } else {
+    ensureSessionInit();
+  }
 }
 
 // ─── Input processing (shared between readline and raw-TUI modes) ────────────
 
 function processInputLine(trimmed) {
   if (!trimmed) return;
+
+  // Lazy session: create session file on first input
+  ensureSessionInit();
 
   // Log received input
   appendFileSync(inboxLog, `${new Date().toISOString()} ${trimmed}\n`);
