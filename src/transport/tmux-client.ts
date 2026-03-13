@@ -68,7 +68,10 @@ export async function pasteToPane(pane: string | undefined, text: string): Promi
     const bufName = `duet-${process.pid}-${seq}`;
     const tmp = `/tmp/duet-paste-${process.pid}-${seq}.txt`;
     try {
-      await writeFile(tmp, text);
+      // Ensure content ends with \n so readline-based receivers emit
+      // all lines as complete 'line' events before Enter arrives.
+      const content = text.endsWith('\n') ? text : text + '\n';
+      await writeFile(tmp, content);
       await execAsync(`${tmuxCmd()} load-buffer -b ${shellEscape(bufName)} ${shellEscape(tmp)}`);
       await execAsync(`${tmuxCmd()} paste-buffer -p -b ${shellEscape(bufName)} -t ${shellEscape(pane)}`);
       // Wait for TUI to process the pasted content before submitting

@@ -321,12 +321,14 @@ describe('watcher failure visibility', () => {
 // ─── Fix 3: Transport delivery failure handling ──────────────────────────────
 
 describe('transport delivery failure handling', () => {
-  it('direct commands check sendKeys return value', () => {
+  it('direct commands check send result and support multiline', () => {
     const src = readRouterSource();
-    const claudeBlock = src.slice(src.indexOf("case 'claude':"), src.indexOf("case 'claude':") + 300);
-    assert.ok(claudeBlock.includes('await sendKeys') && claudeBlock.includes('Failed to send'), '@claude should check sendKeys result');
-    const codexBlock = src.slice(src.indexOf("case 'codex':"), src.indexOf("case 'codex':") + 300);
-    assert.ok(codexBlock.includes('await sendKeys') && codexBlock.includes('Failed to send'), '@codex should check sendKeys result');
+    const claudeBlock = src.slice(src.indexOf("case 'claude':"), src.indexOf("case 'claude':") + 400);
+    assert.ok(claudeBlock.includes('pasteToPane') && claudeBlock.includes('sendKeys'), '@claude should use pasteToPane for multiline and sendKeys for single-line');
+    assert.ok(claudeBlock.includes('Failed to send'), '@claude should report delivery failure');
+    const codexBlock = src.slice(src.indexOf("case 'codex':"), src.indexOf("case 'codex':") + 400);
+    assert.ok(codexBlock.includes('pasteToPane') && codexBlock.includes('sendKeys'), '@codex should use pasteToPane for multiline and sendKeys for single-line');
+    assert.ok(codexBlock.includes('Failed to send'), '@codex should report delivery failure');
   });
 
   it('@both checks both sendKeys results', () => {

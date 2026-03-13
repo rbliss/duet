@@ -336,9 +336,10 @@ async function handleInput(input: string): Promise<void> {
       console.log(`Usage: @relay claude>codex [optional prompt]`);
       return;
     case 'both': {
+      const send = parsed.msg.includes('\n') ? pasteToPane : sendKeys;
       const [cOk, xOk] = await Promise.all([
-        sendKeys(PANES.claude, parsed.msg),
-        sendKeys(PANES.codex, parsed.msg),
+        send(PANES.claude, parsed.msg),
+        send(PANES.codex, parsed.msg),
       ]);
       if (cOk && xOk) {
         console.log(`${C.yellow}-> both${C.reset}`);
@@ -348,20 +349,24 @@ async function handleInput(input: string): Promise<void> {
       }
       return;
     }
-    case 'claude':
-      if (await sendKeys(PANES.claude, parsed.msg)) {
+    case 'claude': {
+      const send = parsed.msg.includes('\n') ? pasteToPane : sendKeys;
+      if (await send(PANES.claude, parsed.msg)) {
         console.log(`${C.magenta}-> claude${C.reset}`);
       } else {
         console.log(`${C.red}Failed to send to claude${C.reset}`);
       }
       return;
-    case 'codex':
-      if (await sendKeys(PANES.codex, parsed.msg)) {
+    }
+    case 'codex': {
+      const send = parsed.msg.includes('\n') ? pasteToPane : sendKeys;
+      if (await send(PANES.codex, parsed.msg)) {
         console.log(`${C.green}-> codex${C.reset}`);
       } else {
         console.log(`${C.red}Failed to send to codex${C.reset}`);
       }
       return;
+    }
     case 'unknown_command':
       console.log(`${C.dim}Unknown command. /help for usage.${C.reset}`);
       return;
@@ -415,11 +420,51 @@ export function main(): void {
 
   rlInstance.prompt();
 
-  rlInstance.on('line', (line) => {
-    handleInput(line.trim()).then(() => rlInstance.prompt());
+  // ── Paste-aware input coalescer ──────────────────────────────────────────
+  // When multiline text is pasted, readline fires separate 'line' events.
+  // We buffer rapid lines (within 50ms) into a single input, but only when
+  // the first line starts with a multiline-capable command. Other commands
+  // are processed immediately to avoid merging unrelated inputs.
+  const PASTE_DEBOUNCE_MS = 50;
+  const MULTILINE_PREFIXES = ['@claude', '@codex', '@both', '@relay'];
+  let pasteBuffer: string[] = [];
+  let pasteTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function isMultilineCapable(line: string): boolean {
+    const trimmed = line.trimStart();
+    return MULTILINE_PREFIXES.some(p => trimmed.startsWith(p));
+  }
+
+  function flushPasteBuffer(): void {
+    pasteTimer = null;
+    if (pasteBuffer.length === 0) return;
+    // Join raw lines preserving indentation; only trim outer edges
+    const fullInput = pasteBuffer.join('\n').trim();
+    pasteBuffer = [];
+    handleInput(fullInput).then(() => rlInstance.prompt());
+  }
+
+  rlInstance.on('line', (line: string) => {
+    if (pasteBuffer.length === 0) {
+      // First line — decide whether to coalesce
+      pasteBuffer.push(line);
+      if (isMultilineCapable(line)) {
+        // Might be a multiline paste — wait briefly for more lines
+        pasteTimer = setTimeout(flushPasteBuffer, PASTE_DEBOUNCE_MS);
+      } else {
+        // Single-line command — process immediately
+        flushPasteBuffer();
+      }
+    } else {
+      // Subsequent line arriving during debounce window — append
+      pasteBuffer.push(line);
+      if (pasteTimer) clearTimeout(pasteTimer);
+      pasteTimer = setTimeout(flushPasteBuffer, PASTE_DEBOUNCE_MS);
+    }
   });
 
   rlInstance.on('close', () => {
+    if (pasteTimer) { clearTimeout(pasteTimer); flushPasteBuffer(); }
     stopPolling();
     process.exit(0);
   });

@@ -223,4 +223,20 @@ describe('dist: headless launch', { timeout: 60000 }, () => {
 
     await h.sendToRouter('/stop');
   });
+
+  it('multiline paste works via dist router', async () => {
+    const token = `DIST_MLPASTE_${Date.now()}`;
+    const multiline = `@codex ${token}\nDist line 1\nDist line 2`;
+    await h.sendToRouter(multiline);
+
+    await e2eWaitFor(() => {
+      const inbox = h.readInbox('codex');
+      return inbox.includes(token) && inbox.includes('Dist line 2');
+    }, 15000);
+
+    const inbox = h.readInbox('codex');
+    assert.ok(inbox.includes(token), 'codex should receive token via dist multiline paste');
+    assert.ok(inbox.includes('Dist line 1'), 'codex should receive line 1 via dist');
+    assert.ok(inbox.includes('Dist line 2'), 'codex should receive line 2 via dist');
+  });
 });

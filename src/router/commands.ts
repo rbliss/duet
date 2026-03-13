@@ -64,20 +64,20 @@ export function parseInput(input: string | null | undefined): ParsedInput {
   }
 
   if (input.startsWith('@relay ')) {
-    const match = input.match(/@relay\s+(claude|codex)\s*>\s*(claude|codex)(?:\s+(.*))?/);
+    const match = input.match(/@relay\s+(claude|codex)\s*>\s*(claude|codex)(?:\s+([\s\S]*))?/);
     if (match) {
       return { type: 'relay', from: match[1], to: match[2], prompt: match[3] || null };
     }
     return { type: 'relay_error' };
   }
 
-  const bothMatch = input.match(/^@both[\s,:.!?;-]\s*(.*)/);
+  const bothMatch = input.match(/^@both[\s,:.!?;-]\s*([\s\S]*)/);
   if (bothMatch) return { type: 'both', msg: bothMatch[1] };
 
-  const claudeMatch = input.match(/^@claude[\s,:.!?;-]\s*(.*)/);
+  const claudeMatch = input.match(/^@claude[\s,:.!?;-]\s*([\s\S]*)/);
   if (claudeMatch) return { type: 'claude', msg: claudeMatch[1] };
 
-  const codexMatch = input.match(/^@codex[\s,:.!?;-]\s*(.*)/);
+  const codexMatch = input.match(/^@codex[\s,:.!?;-]\s*([\s\S]*)/);
   if (codexMatch) return { type: 'codex', msg: codexMatch[1] };
 
   if (input.startsWith('/')) return { type: 'unknown_command' };

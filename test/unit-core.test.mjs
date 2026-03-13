@@ -306,3 +306,51 @@ describe('edge cases', () => {
     assert.ok(result.length >= 0);
   });
 });
+
+// ─── Unit Tests: parseInput multiline ─────────────────────────────────────
+
+describe('parseInput multiline', () => {
+  it('@claude preserves multiline body', () => {
+    const input = '@claude Here is the plan:\n  Step 1: do this\n  Step 2: do that';
+    const result = parseInput(input);
+    assert.equal(result.type, 'claude');
+    assert.equal(result.msg, 'Here is the plan:\n  Step 1: do this\n  Step 2: do that');
+  });
+
+  it('@codex preserves multiline body with indentation', () => {
+    const input = '@codex Review this code:\n  function foo() {\n    return 42;\n  }';
+    const result = parseInput(input);
+    assert.equal(result.type, 'codex');
+    assert.ok(result.msg.includes('  function foo() {'));
+    assert.ok(result.msg.includes('    return 42;'));
+  });
+
+  it('@both preserves multiline body', () => {
+    const input = '@both Run these tests:\ntest 1\ntest 2\ntest 3';
+    const result = parseInput(input);
+    assert.equal(result.type, 'both');
+    assert.equal(result.msg, 'Run these tests:\ntest 1\ntest 2\ntest 3');
+  });
+
+  it('@relay preserves multiline prompt', () => {
+    const input = '@relay claude>codex Here is context:\nline 1\nline 2';
+    const result = parseInput(input);
+    assert.equal(result.type, 'relay');
+    assert.equal(result.from, 'claude');
+    assert.equal(result.to, 'codex');
+    assert.equal(result.prompt, 'Here is context:\nline 1\nline 2');
+  });
+
+  it('preserves blank lines in body', () => {
+    const input = '@claude First paragraph\n\nSecond paragraph';
+    const result = parseInput(input);
+    assert.equal(result.type, 'claude');
+    assert.equal(result.msg, 'First paragraph\n\nSecond paragraph');
+  });
+
+  it('single-line commands still work normally', () => {
+    assert.deepEqual(parseInput('/help'), { type: 'help' });
+    assert.deepEqual(parseInput('/quit'), { type: 'quit' });
+    assert.deepEqual(parseInput('@claude single line'), { type: 'claude', msg: 'single line' });
+  });
+});
