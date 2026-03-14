@@ -295,16 +295,16 @@ async function handleInput(input: string): Promise<void> {
       }
       enableAutoRelay();
       console.log(`${C.cyan}Starting conversation: "${parsed.topic}" (${parsed.maxRounds} rounds)${C.reset}`);
-      const opener = `Let's discuss with @codex: ${parsed.topic}`;
-      if (await pasteToPane(PANES.claude, opener)) {
+      const opener = `Let's discuss with @claude: ${parsed.topic}`;
+      if (await pasteToPane(PANES.codex, opener)) {
         setConverseState({
-          turn: 'claude',
+          turn: 'codex',
           rounds: 0,
           maxRounds: parsed.maxRounds,
           topic: parsed.topic,
         });
       } else {
-        console.log(`${C.red}Failed to deliver opener to claude — conversation not started${C.reset}`);
+        console.log(`${C.red}Failed to deliver opener to codex — conversation not started${C.reset}`);
       }
       return;
     }

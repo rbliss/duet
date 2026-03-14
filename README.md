@@ -89,7 +89,7 @@ duet> @relay codex>claude implement the fixes codex suggested
 
 The tools can talk to each other. There are two modes:
 
-**Converse mode** starts a multi-round discussion on a topic. Claude goes first, its response is automatically relayed to Codex, Codex's response goes back to Claude, and so on.
+**Converse mode** starts a multi-round discussion on a topic. Codex goes first, its response is automatically relayed to Claude, Claude's response goes back to Codex, and so on.
 
 | Command | Description |
 |---|---|

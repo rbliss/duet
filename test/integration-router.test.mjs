@@ -376,6 +376,15 @@ describe('transport delivery failure handling', () => {
     assert.ok(pasteIdx > 0 && stateIdx > 0, 'both pasteToPane and setConverseState must exist');
     assert.ok(stateIdx > pasteIdx, `setConverseState must be set after delivery (paste@${pasteIdx}, state@${stateIdx})`);
   });
+
+  it('/converse delivers opener to codex and sets initial turn to codex', () => {
+    const src = readRouterSource();
+    const converseStart = src.slice(src.indexOf("case 'converse':"), src.indexOf("case 'converse':") + 1200);
+    assert.ok(converseStart.includes('PANES.codex'), 'opener should be delivered to codex pane');
+    assert.ok(!converseStart.includes('PANES.claude'), 'opener should not be delivered to claude pane');
+    assert.ok(converseStart.includes("turn: 'codex'"), 'initial turn should be codex');
+    assert.ok(converseStart.includes('@claude'), 'opener text should mention @claude');
+  });
 });
 
 // ─── Phase 3-5: session-only automation, explicit binding, no pane fallback ──
