@@ -141,9 +141,9 @@ function processInputLine(trimmed) {
   // Log received input
   appendFileSync(inboxLog, `${new Date().toISOString()} ${trimmed}\n`);
 
-  // Mention @claude mode: use new Codex CLI ≥0.105 JSONL formats
+  // Mention @claude mode — @claude at line start for strict detection
   if (trimmed.includes('MENTION_CLAUDE')) {
-    const responseText = `I think @claude should look at this. Input was: ${trimmed}`;
+    const responseText = `@claude should look at this. Input was: ${trimmed}`;
     writeResponseNewFormat(responseText);
     console.log(responseText);
     return;

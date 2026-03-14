@@ -239,4 +239,15 @@ describe('dist: headless launch', { timeout: 60000 }, () => {
     assert.ok(inbox.includes('Dist line 1'), 'codex should receive line 1 via dist');
     assert.ok(inbox.includes('Dist line 2'), 'codex should receive line 2 via dist');
   });
+
+  it('auto-relay requires /watch via dist router', async () => {
+    // Without /watch, Claude mentioning @codex at line start should NOT relay
+    const token = `DIST_MENTION_CODEX_${Date.now()}`;
+    await h.sendToRouter(`@claude ${token}`);
+    await e2eWaitFor(() => h.readInbox('claude').includes(token), 8000);
+    await e2eSleep(2000);
+    const codexInbox = h.readInbox('codex');
+    assert.ok(!codexInbox.includes(token),
+      'codex should NOT receive auto-relay without /watch via dist router');
+  });
 });

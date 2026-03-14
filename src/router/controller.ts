@@ -14,7 +14,8 @@ import {
   setRl, isWatching, prompt, bindingStatus,
   getConverseState, setConverseState, setNewOutputHandler,
   getSessionResponse, readRunJson, getRouterState,
-  startPolling, stopPolling, startFileWatcher, stopFileWatchers,
+  startMonitoring, stopAll, enableAutoRelay, disableAutoRelay,
+  startFileWatcher, stopFileWatchers,
   findRebindCandidate, rebindTool,
 } from './state.js';
 import {
@@ -63,7 +64,8 @@ export async function handleNewOutput(source: ToolName, newContent: string): Pro
     return;
   }
 
-  // --- @mention detection (per-direction cooldown to prevent loops) ---
+  // --- @mention detection (only when watch mode is explicitly enabled) ---
+  if (!isWatching()) return;
   const direction = `${source}->${other}`;
   if (now - (lastAutoRelayTime[direction] || 0) < RELAY_COOLDOWN_MS) return;
 
@@ -122,7 +124,7 @@ async function handleInput(input: string): Promise<void> {
     case 'empty': return;
     case 'help': return printBanner();
     case 'quit':
-      stopPolling();
+      stopAll();
       console.log(`${C.dim}Stopping tools...${C.reset}`);
       await sendKeys(PANES.claude, '/exit');
       await sendKeys(PANES.codex, '/exit');
@@ -140,7 +142,7 @@ async function handleInput(input: string): Promise<void> {
       }
       return;
     case 'destroy':
-      stopPolling();
+      stopAll();
       console.log(`${C.dim}Destroying run — stopping tools and removing state...${C.reset}`);
       await sendKeys(PANES.claude, '/exit');
       await sendKeys(PANES.codex, '/exit');
@@ -155,17 +157,17 @@ async function handleInput(input: string): Promise<void> {
       process.stdout.write('\x1b[2J\x1b[H');
       return;
     case 'watch': {
-      startPolling();
-      console.log(`${C.cyan}Watching for @mentions — tools can now talk to each other${C.reset}`);
+      enableAutoRelay();
+      console.log(`${C.cyan}Auto-relay enabled — watching for @mentions${C.reset}`);
       for (const tool of (['claude', 'codex'] as ToolName[])) {
         const bs = bindingStatus(tool);
         const color = tool === 'claude' ? C.magenta : C.green;
         if (bs === 'bound' && watcherFailed.has(tool)) {
-          console.log(`  ${color}${tool}${C.reset}: ${C.red}inactive${C.reset} (watcher failed — /rebind ${tool})`);
+          console.log(`  ${color}${tool}${C.reset}: ${C.red}watcher failed${C.reset} — /rebind ${tool}`);
         } else if (bs === 'bound') {
-          console.log(`  ${color}${tool}${C.reset}: ${C.green}active${C.reset} (session-bound)`);
+          console.log(`  ${color}${tool}${C.reset}: ${C.green}ready${C.reset}`);
         } else if (bs === 'pending') {
-          console.log(`  ${color}${tool}${C.reset}: ${C.yellow}waiting${C.reset} (binding pending)`);
+          console.log(`  ${color}${tool}${C.reset}: ${C.yellow}binding pending${C.reset}`);
         } else {
           console.log(`  ${color}${tool}${C.reset}: ${C.red}unavailable${C.reset} (binding degraded)`);
         }
@@ -173,11 +175,11 @@ async function handleInput(input: string): Promise<void> {
       return;
     }
     case 'stop':
-      if (isWatching()) {
-        stopPolling();
-        console.log(`${C.dim}Stopped watching${C.reset}`);
+      if (isWatching() || getConverseState()) {
+        disableAutoRelay();
+        console.log(`${C.dim}Auto-relay disabled${C.reset}`);
       } else {
-        console.log(`${C.dim}Nothing running${C.reset}`);
+        console.log(`${C.dim}Auto-relay is already off${C.reset}`);
       }
       return;
     case 'status': {
@@ -185,9 +187,9 @@ async function handleInput(input: string): Promise<void> {
       if (cs) {
         console.log(`${C.cyan}Converse:${C.reset} "${cs.topic}" — round ${cs.rounds}/${cs.maxRounds}, waiting on ${cs.turn}`);
       } else if (isWatching()) {
-        console.log(`${C.cyan}Watching${C.reset} for @mentions`);
+        console.log(`${C.cyan}Auto-relay:${C.reset} ${C.green}on${C.reset} (watching for @mentions)`);
       } else {
-        console.log(`${C.dim}Idle — not watching${C.reset}`);
+        console.log(`${C.cyan}Auto-relay:${C.reset} ${C.dim}off${C.reset} — use /watch to enable`);
       }
       for (const tool of (['claude', 'codex'] as ToolName[])) {
         const st = sessionState[tool];
@@ -195,10 +197,19 @@ async function handleInput(input: string): Promise<void> {
         const color = tool === 'claude' ? C.magenta : C.green;
         const pad = tool === 'claude' ? '' : ' ';
         const level = st.bindingLevel ? ` (${st.bindingLevel})` : '';
-        const watching = !!st.path && bs === 'bound' ? ', watching' : bs === 'pending' ? ', polling binding' : watcherFailed.has(tool) ? ', watcher failed' : '';
         const bsColor = (bs === 'bound' && !watcherFailed.has(tool)) ? C.green : bs === 'pending' ? C.yellow : C.red;
-        const autoLabel = (bs === 'bound' && !watcherFailed.has(tool)) ? 'active' : bs === 'pending' ? 'waiting' : (bs === 'bound' && watcherFailed.has(tool)) ? 'inactive' : 'unavailable';
-        console.log(`  ${color}${tool}${C.reset}${pad} binding: ${bsColor}${bs}${level}${C.reset}  automation: ${bsColor}${autoLabel}${watching}${C.reset}`);
+        // Monitoring state: is the session file being tracked?
+        let monLabel: string;
+        if (bs === 'bound' && !watcherFailed.has(tool)) {
+          monLabel = `${C.green}active${C.reset}`;
+        } else if (bs === 'pending') {
+          monLabel = `${C.yellow}waiting${C.reset}`;
+        } else if (bs === 'bound' && watcherFailed.has(tool)) {
+          monLabel = `${C.red}watcher failed${C.reset}`;
+        } else {
+          monLabel = `${C.red}unavailable${C.reset}`;
+        }
+        console.log(`  ${color}${tool}${C.reset}${pad} binding: ${bsColor}${bs}${level}${C.reset}  monitoring: ${monLabel}`);
       }
       return;
     }
@@ -278,7 +289,7 @@ async function handleInput(input: string): Promise<void> {
         if (xbs !== 'bound') console.log(`  ${C.green}codex${C.reset}:  ${C.red}${xbs}${C.reset}`);
         return;
       }
-      startPolling();
+      enableAutoRelay();
       console.log(`${C.cyan}Starting conversation: "${parsed.topic}" (${parsed.maxRounds} rounds)${C.reset}`);
       const opener = `Let's discuss with @codex: ${parsed.topic}`;
       if (await pasteToPane(PANES.claude, opener)) {
@@ -400,23 +411,23 @@ export function main(): void {
     console.log(`${C.green}Forked session${C.reset}`);
   }
 
-  startPolling();
+  startMonitoring();
 
   for (const tool of (['claude', 'codex'] as ToolName[])) {
     const bs = bindingStatus(tool);
     const st = sessionState[tool];
     const level = st.bindingLevel ? ` [${st.bindingLevel}]` : '';
     if (bs === 'bound' && watcherFailed.has(tool)) {
-      console.log(`${C.red}${tool}: session-bound but watcher failed — automation inactive${C.reset}`);
+      console.log(`${C.red}${tool}: session-bound but watcher failed${C.reset}`);
     } else if (bs === 'bound') {
-      console.log(`${C.green}${tool}: session-bound — automation active${level}${C.reset}`);
+      console.log(`${C.green}${tool}: session-bound${level}${C.reset}`);
     } else if (bs === 'pending') {
-      console.log(`${C.yellow}${tool}: binding pending — automation will start when bound${C.reset}`);
+      console.log(`${C.yellow}${tool}: binding pending${C.reset}`);
     } else {
-      console.log(`${C.red}${tool}: binding degraded — automation unavailable${C.reset}`);
+      console.log(`${C.red}${tool}: binding degraded${C.reset}`);
     }
   }
-  console.log(`${C.cyan}Watching for @mentions — tools can talk to each other${C.reset}\n`);
+  console.log(`${C.dim}Use /watch to enable auto-relay, or @relay to relay manually.${C.reset}\n`);
 
   rlInstance.prompt();
 
@@ -465,7 +476,7 @@ export function main(): void {
 
   rlInstance.on('close', () => {
     if (pasteTimer) { clearTimeout(pasteTimer); flushPasteBuffer(); }
-    stopPolling();
+    stopAll();
     process.exit(0);
   });
 }

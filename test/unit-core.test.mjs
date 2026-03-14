@@ -209,44 +209,106 @@ describe('parseInput', () => {
 // ─── Unit Tests: detectMentions ──────────────────────────────────────────────
 
 describe('detectMentions', () => {
-  it('detects @claude mention', () => {
-    assert.deepEqual(detectMentions('Hey @claude check this'), ['claude']);
+  // ── Line-start mentions (should trigger) ──
+  it('detects @claude at start of text', () => {
+    assert.deepEqual(detectMentions('@claude check this'), ['claude']);
   });
 
-  it('detects @codex mention', () => {
-    assert.deepEqual(detectMentions('Hey @codex review this'), ['codex']);
+  it('detects @codex at start of text', () => {
+    assert.deepEqual(detectMentions('@codex review this'), ['codex']);
   });
 
-  it('detects both mentions', () => {
-    const result = detectMentions('@claude and @codex should discuss');
+  it('detects @mention at start of a later line', () => {
+    assert.deepEqual(detectMentions('Some preamble\n@codex here is the update'), ['codex']);
+  });
+
+  it('detects both when each starts a line', () => {
+    const result = detectMentions('@claude first part\n@codex second part');
     assert.ok(result.includes('claude'));
     assert.ok(result.includes('codex'));
     assert.equal(result.length, 2);
   });
 
-  it('returns empty for no mentions', () => {
-    assert.deepEqual(detectMentions('no mentions here'), []);
+  it('is case insensitive', () => {
+    assert.deepEqual(detectMentions('@Claude do this'), ['claude']);
+    assert.deepEqual(detectMentions('@CODEX do that'), ['codex']);
   });
 
-  it('is case insensitive', () => {
-    assert.deepEqual(detectMentions('@Claude and @CODEX'), ['claude', 'codex']);
+  it('matches with leading whitespace on line', () => {
+    assert.deepEqual(detectMentions('  @codex indented address'), ['codex']);
+  });
+
+  it('matches with punctuation after mention', () => {
+    assert.deepEqual(detectMentions('@claude, what do you think?'), ['claude']);
+    assert.deepEqual(detectMentions('@codex - here is my update'), ['codex']);
   });
 
   it('requires word boundary after mention', () => {
     assert.deepEqual(detectMentions('@claudeX something'), []);
   });
 
-  it('matches at start of string', () => {
-    assert.deepEqual(detectMentions('@codex do this'), ['codex']);
+  it('returns empty for no mentions', () => {
+    assert.deepEqual(detectMentions('no mentions here'), []);
   });
 
-  it('matches at end of string', () => {
-    assert.deepEqual(detectMentions('thoughts @claude'), ['claude']);
+  // ── Inline mentions (should NOT trigger) ──
+  it('ignores inline @codex in prose', () => {
+    assert.deepEqual(detectMentions('share with @codex so we can converge'), []);
   });
 
-  it('matches with punctuation after', () => {
-    assert.deepEqual(detectMentions('@claude, what do you think?'), ['claude']);
-    assert.deepEqual(detectMentions('ask @codex.'), ['codex']);
+  it('ignores inline @claude in prose', () => {
+    assert.deepEqual(detectMentions('I think @claude should look at this'), []);
+  });
+
+  it('ignores mid-sentence mention', () => {
+    assert.deepEqual(detectMentions('thoughts @claude'), []);
+  });
+
+  it('ignores inline mention after verb', () => {
+    assert.deepEqual(detectMentions('ask @codex.'), []);
+  });
+
+  // ── Live failure regression: real Claude output ──
+  it('ignores incidental mention from real Claude output', () => {
+    const text = "I'll synthesize all findings once they complete and share with @codex so we can converge on the final architecture.";
+    assert.deepEqual(detectMentions(text), []);
+  });
+
+  it('detects explicit address from real Claude output', () => {
+    const text = "Here are my findings:\n\n@codex - Great analysis. Here's my implementor-angle pressure test of your proposal:";
+    assert.deepEqual(detectMentions(text), ['codex']);
+  });
+
+  // ── Code fences (should NOT trigger) ──
+  it('ignores @mention inside fenced code block', () => {
+    const text = 'Here is an example:\n```\n@codex do something\n```\nEnd of message.';
+    assert.deepEqual(detectMentions(text), []);
+  });
+
+  it('ignores @mention inside triple-backtick with language', () => {
+    const text = '```typescript\n@claude run tests\n```';
+    assert.deepEqual(detectMentions(text), []);
+  });
+
+  // ── Blockquotes (should NOT trigger) ──
+  it('ignores @mention in blockquote', () => {
+    assert.deepEqual(detectMentions('> @codex said something earlier'), []);
+  });
+
+  it('ignores nested blockquote mention', () => {
+    assert.deepEqual(detectMentions('> > @claude agreed with this'), []);
+  });
+
+  // ── Mixed scenarios ──
+  it('detects line-start mention but ignores inline in same text', () => {
+    const text = 'I agree with @codex on this.\n\n@claude - please review the implementation';
+    const result = detectMentions(text);
+    assert.deepEqual(result, ['claude']);
+  });
+
+  it('does not double-count same mention on multiple lines', () => {
+    const text = '@codex first point\n@codex second point';
+    assert.deepEqual(detectMentions(text), ['codex']);
   });
 });
 
@@ -302,8 +364,7 @@ describe('edge cases', () => {
   });
 
   it('detectMentions ignores email-like patterns', () => {
-    const result = detectMentions('email user@claude.ai');
-    assert.ok(result.length >= 0);
+    assert.deepEqual(detectMentions('email user@claude.ai'), []);
   });
 });
 

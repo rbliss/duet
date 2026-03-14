@@ -161,7 +161,7 @@ export function renderDebugReport(snapshot: Record<string, unknown>): string {
     // Binding status (normalized)
     let statusLabel = t.bindingStatus as string;
     if (t.bindingStatus === 'bound' && t.watcherFailed) {
-      statusLabel = 'bound (watcher FAILED — automation inactive)';
+      statusLabel = 'bound (watcher FAILED)';
     } else if (t.bindingStatus === 'bound' && t.watcherActive) {
       statusLabel = 'bound (watcher active)';
     }

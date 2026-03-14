@@ -278,7 +278,7 @@ describe('watcher failure visibility', () => {
   it('startup reports watcher failure instead of active', () => {
     const src = readRouterSource();
     assert.ok(src.includes('watcherFailed.add(name)'), 'startPolling should track watcher failures');
-    assert.ok(src.includes("watcher failed — automation inactive"), 'should report watcher failure');
+    assert.ok(src.includes("watcher failed"), 'should report watcher failure');
   });
 
   it('/status shows inactive when watcher failed for bound tool', () => {
@@ -287,11 +287,11 @@ describe('watcher failure visibility', () => {
     assert.ok(statusBlock.includes('watcherFailed.has(tool)'), '/status must check watcherFailed');
   });
 
-  it('/watch shows inactive when watcher failed for bound tool', () => {
+  it('/watch shows watcher failure when watcher failed for bound tool', () => {
     const src = readRouterSource();
     const watchBlock = src.slice(src.indexOf("case 'watch':"), src.indexOf("case 'watch':") + 1200);
     assert.ok(watchBlock.includes('watcherFailed.has(tool)'), '/watch must check watcherFailed');
-    assert.ok(watchBlock.includes('inactive'), '/watch should show inactive for failed watcher');
+    assert.ok(watchBlock.includes('watcher failed'), '/watch should show watcher failed');
   });
 
   it('watcher error handler adds to watcherFailed set', () => {
@@ -459,19 +459,20 @@ describe('/watch and /status messaging', () => {
       src.indexOf("case 'watch':") + 1200
     );
     assert.ok(watchBlock.includes('bindingStatus'), '/watch should check binding status');
-    assert.ok(watchBlock.includes('active'), '/watch should report active for bound');
-    assert.ok(watchBlock.includes('waiting'), '/watch should report waiting for pending');
+    assert.ok(watchBlock.includes('ready'), '/watch should report ready for bound');
+    assert.ok(watchBlock.includes('pending'), '/watch should report pending for unbound');
     assert.ok(watchBlock.includes('unavailable'), '/watch should report unavailable for degraded');
   });
 
-  it('/status shows binding state and automation availability', () => {
+  it('/status shows binding state and monitoring/auto-relay status', () => {
     const src = readRouterSource();
     const statusBlock = src.slice(
       src.indexOf("case 'status':"),
-      src.indexOf("case 'status':") + 1500
+      src.indexOf("case 'status':") + 2000
     );
     assert.ok(statusBlock.includes('bindingStatus'), '/status should show binding status');
-    assert.ok(statusBlock.includes('automation:'), '/status should show automation state');
+    assert.ok(statusBlock.includes('monitoring:'), '/status should show monitoring state');
+    assert.ok(statusBlock.includes('isWatching'), '/status should check auto-relay state');
   });
 
   it('no stale auto-downgrade remains', () => {
@@ -700,7 +701,7 @@ describe('renderDebugReport', () => {
     });
     const report = renderDebugReport(snapshot);
     assert.ok(report.includes('watcher FAILED'), 'bound + watcher failed must look unhealthy');
-    assert.ok(report.includes('automation inactive'), 'must indicate automation is inactive');
+    assert.ok(report.includes('watcher FAILED'), 'must indicate watcher failed');
   });
 
   it('renders degraded status instead of pane', () => {

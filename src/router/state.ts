@@ -48,7 +48,8 @@ export const RELAY_COOLDOWN_MS = 8000;
 // ─── Mutable state ──────────────────────────────────────────────────────────
 
 let rl: ReadlineInterface | null = null;
-let watchInterval: true | null = null;
+let monitoringActive = false;   // binding polling + session watchers (always on after startup)
+let autoRelayEnabled = false;   // mention-driven auto-relay (on after /watch)
 export const lastAutoRelayTime: Record<string, number> = {};
 let converseState: ConverseState | null = null;
 
@@ -67,7 +68,8 @@ let newOutputHandler: NewOutputHandler | null = null;
 // ─── Accessors ───────────────────────────────────────────────────────────────
 
 export function setRl(readline: ReadlineInterface): void { rl = readline; }
-export function isWatching(): boolean { return watchInterval !== null; }
+export function isWatching(): boolean { return autoRelayEnabled; }
+export function isMonitoring(): boolean { return monitoringActive; }
 export function prompt(): void { if (rl) rl.prompt(); }
 
 export function getConverseState(): ConverseState | null { return converseState; }
@@ -140,7 +142,7 @@ export function startFileWatcher(tool: string): boolean {
     fileWatchers[tool].on('error', () => {
       stopFileWatcher(tool);
       watcherFailed.add(tool);
-      console.log(`\n${C.red}${tool}: session watcher failed — automation inactive. Use /rebind ${tool} to repair.${C.reset}`);
+      console.log(`\n${C.red}${tool}: session watcher failed. Use /rebind ${tool} to repair.${C.reset}`);
       prompt();
     });
     return true;
@@ -165,10 +167,13 @@ export function stopFileWatchers(): void {
 }
 
 function onFileChange(tool: string): void {
-  if (!watchInterval) return;
+  if (!monitoringActive) return;
+  // Always process new session data (keeps lastResponse fresh for @relay)
   const { hasNew, complete } = readIncremental(tool as ToolName);
   if (!hasNew) return;
   sessionState[tool as ToolName].lastSessionActivityAt = Date.now();
+  // Only schedule auto-relay if watch mode or converse mode is active
+  if (!autoRelayEnabled && !converseState) return;
   if (fileDebounceTimers[tool]) clearTimeout(fileDebounceTimers[tool]);
   const delay = complete ? SESSION_COMPLETE_MS : SESSION_DEBOUNCE_MS;
   fileDebounceTimers[tool] = setTimeout(() => triggerSessionRelay(tool), delay);
@@ -183,7 +188,7 @@ async function triggerSessionRelay(tool: string): Promise<void> {
 // ─── Polling start / stop ────────────────────────────────────────────────────
 
 function scheduleBindingPoll(): void {
-  if (!watchInterval || pendingTools.size === 0) return;
+  if (!monitoringActive || pendingTools.size === 0) return;
   bindingPollTimer = setTimeout(() => {
     pollBindings();
     scheduleBindingPoll();
@@ -228,7 +233,7 @@ function pollBindings(): void {
         console.log(`\n${C.green}${name}: binding resolved — session log watcher active${C.reset}`);
       } else {
         watcherFailed.add(name);
-        console.log(`\n${C.red}${name}: binding resolved but watcher failed — automation inactive${C.reset}`);
+        console.log(`\n${C.red}${name}: binding resolved but watcher failed${C.reset}`);
       }
       prompt();
     } else if (st.relayMode === 'pending') {
@@ -243,8 +248,13 @@ function pollBindings(): void {
   }
 }
 
-export function startPolling(): void {
-  if (watchInterval) return;
+/**
+ * Start binding/session monitoring. Always called at startup.
+ * Resolves bindings, starts file watchers, and polls for pending tools.
+ * Does NOT enable auto-relay — use enableAutoRelay() for that.
+ */
+export function startMonitoring(): void {
+  if (monitoringActive) return;
   pendingTools = new Set();
   watcherFailed.clear();
   for (const name of (['claude', 'codex'] as ToolName[])) {
@@ -252,28 +262,50 @@ export function startPolling(): void {
     const st = sessionState[name];
     if (st.relayMode === 'session' && st.path) {
       if (startFileWatcher(name)) {
-        // event-driven relay via session log
+        // event-driven session log watcher
       } else {
-        // Bound but watcher failed to start
         watcherFailed.add(name);
       }
     } else if (st.relayMode === 'pending') {
       pendingTools.add(name);
     }
-    // degraded tools are not added — automation is unavailable for them
   }
-  watchInterval = true; // flag: watching is active
+  monitoringActive = true;
   scheduleBindingPoll();
 }
 
-export function stopPolling(): void {
-  watchInterval = null;
+/**
+ * Enable mention-driven auto-relay (called by /watch and /converse).
+ */
+export function enableAutoRelay(): void {
+  autoRelayEnabled = true;
+}
+
+/**
+ * Disable auto-relay and converse mode (called by /stop).
+ * Monitoring continues — bindings and session state stay live.
+ */
+export function disableAutoRelay(): void {
+  autoRelayEnabled = false;
+  converseState = null;
+}
+
+/**
+ * Stop everything — monitoring, auto-relay, watchers (called by /quit, /destroy).
+ */
+export function stopAll(): void {
+  monitoringActive = false;
+  autoRelayEnabled = false;
   if (bindingPollTimer) { clearTimeout(bindingPollTimer); bindingPollTimer = null; }
   converseState = null;
   stopFileWatchers();
   pendingTools = new Set();
   watcherFailed.clear();
 }
+
+// Backward compat aliases used by tests
+export const startPolling = startMonitoring;
+export const stopPolling = stopAll;
 
 // ─── Rebind ──────────────────────────────────────────────────────────────────
 

@@ -63,9 +63,14 @@ function generateResponse(trimmed) {
     return lines.join('\n');
   }
 
-  // Mention codex mode
+  // Inline mention mode — incidental @codex that should NOT auto-relay
+  if (trimmed.includes('INLINE_MENTION_CODEX')) {
+    return `I think we should share with @codex later. Input was: ${trimmed}`;
+  }
+
+  // Mention codex mode — @codex at line start for strict detection
   if (trimmed.includes('MENTION_CODEX')) {
-    return `I think @codex should review this. Input was: ${trimmed}`;
+    return `@codex should review this. Input was: ${trimmed}`;
   }
 
   return `Claude response to: ${trimmed}`;

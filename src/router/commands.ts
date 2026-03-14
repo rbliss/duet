@@ -7,10 +7,36 @@ import type { ToolName, ParsedInput } from '../types/runtime.js';
 
 // ─── Watch & converse helpers ────────────────────────────────────────────────
 
+/**
+ * Detect intentional @mentions in tool output for auto-relay.
+ *
+ * Only matches @claude / @codex at the **start of a line** (after optional
+ * whitespace). Inline prose like "share with @codex" is ignored.
+ * Also ignores mentions inside fenced code blocks and blockquotes.
+ */
 export function detectMentions(text: string): ToolName[] {
   const mentions: ToolName[] = [];
-  if (/@claude\b/i.test(text)) mentions.push('claude');
-  if (/@codex\b/i.test(text)) mentions.push('codex');
+  const lines = text.split('\n');
+  let inCodeFence = false;
+
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+
+    // Track code fence boundaries
+    if (trimmed.startsWith('```')) {
+      inCodeFence = !inCodeFence;
+      continue;
+    }
+    if (inCodeFence) continue;
+
+    // Skip blockquoted lines
+    if (trimmed.startsWith('>')) continue;
+
+    // Only match @mention at line start
+    if (/^@claude\b/i.test(trimmed) && !mentions.includes('claude')) mentions.push('claude');
+    if (/^@codex\b/i.test(trimmed) && !mentions.includes('codex')) mentions.push('codex');
+  }
+
   return mentions;
 }
 
