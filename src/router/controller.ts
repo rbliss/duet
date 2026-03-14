@@ -65,6 +65,10 @@ export async function handleNewOutput(source: ToolName, newContent: string): Pro
   }
 
   // --- @mention detection (only when watch mode is explicitly enabled) ---
+  // Skip mention detection during converse mode — turn handler owns relay.
+  // Without this, a second debounce for the same response (after the turn
+  // has advanced) would fall through and relay via mentions too.
+  if (converseState) return;
   if (!isWatching()) return;
   const direction = `${source}->${other}`;
   if (now - (lastAutoRelayTime[direction] || 0) < RELAY_COOLDOWN_MS) return;

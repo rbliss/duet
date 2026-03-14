@@ -362,7 +362,7 @@ describe('transport delivery failure handling', () => {
 
   it('watch-mode cooldown not recorded on failed delivery', () => {
     const src = readRouterSource();
-    const mentionBlock = src.slice(src.indexOf('@mention detection'), src.indexOf('@mention detection') + 800);
+    const mentionBlock = src.slice(src.indexOf('@mention detection'), src.indexOf('@mention detection') + 1000);
     assert.ok(mentionBlock.includes('if (delivered)'), 'cooldown should be conditional on delivery');
     assert.ok(mentionBlock.includes('delivery to ${other} failed'), 'should log failed auto-relay delivery');
   });
