@@ -45,6 +45,10 @@ const SESSION_DEBOUNCE_MS = 800;
 const SESSION_COMPLETE_MS = 200;
 export const RELAY_COOLDOWN_MS = 8000;
 
+// ─── Startup warmup skip ─────────────────────────────────────────────────────
+
+const SKIP_STARTUP_HISTORY = process.env.DUET_SKIP_STARTUP_HISTORY === '1';
+
 // ─── Mutable state ──────────────────────────────────────────────────────────
 
 let rl: ReadlineInterface | null = null;
@@ -229,6 +233,11 @@ function pollBindings(): void {
     const st = sessionState[name as ToolName];
     if (st.relayMode === 'session' && st.path) {
       pendingTools.delete(name);
+      // Skip warmup history: seek reader past any startup prompt/response
+      if (SKIP_STARTUP_HISTORY) {
+        try { const { size } = statSync(st.path); st.offset = size; } catch {}
+        st.lastResponse = null;
+      }
       if (startFileWatcher(name)) {
         console.log(`\n${C.green}${name}: binding resolved — session log watcher active${C.reset}`);
       } else {
@@ -261,6 +270,11 @@ export function startMonitoring(): void {
     resolveSessionPath(name);
     const st = sessionState[name];
     if (st.relayMode === 'session' && st.path) {
+      // Skip warmup history: seek reader past any startup prompt/response
+      if (SKIP_STARTUP_HISTORY) {
+        try { const { size } = statSync(st.path); st.offset = size; } catch {}
+        st.lastResponse = null;
+      }
       if (startFileWatcher(name)) {
         // event-driven session log watcher
       } else {

@@ -47,6 +47,7 @@ export interface LaunchRouterOptions {
   mode: string;
   claudePane: string;
   codexPane: string;
+  skipStartupHistory?: boolean;
 }
 
 // ─── Router: parsed input ────────────────────────────────────────────────────

@@ -8,6 +8,8 @@
 //
 // Test knobs (env vars):
 //   FAKE_CLAUDE_BIND_DELAY_MS  - delay before creating session log (tests late binding)
+//   FAKE_CLAUDE_LAZY_SESSION   - if '1', defer session log creation until first input
+//                                 (simulates lazy session behavior)
 //   DUET_INBOX_DIR             - where to write inbox log (overrides DUET_RUN_DIR)
 
 import { createInterface } from 'readline';
@@ -17,9 +19,25 @@ import { join } from 'path';
 const args = process.argv.slice(2);
 let sessionId = null;
 let launchMode = 'unknown';
-for (let i = 0; i < args.length; i++) {
-  if (args[i] === '--session-id') { sessionId = args[i + 1]; launchMode = 'new'; }
-  if (args[i] === '--resume') { sessionId = args[i + 1]; launchMode = 'resume'; }
+let startupPrompt = null;
+
+// Parse flags and positional args
+const flagsWithValue = new Set(['--session-id', '--resume', '--append-system-prompt']);
+const flagsStandalone = new Set(['--dangerously-skip-permissions', '--fork-session']);
+
+let i = 0;
+while (i < args.length) {
+  if (flagsWithValue.has(args[i])) {
+    if (args[i] === '--session-id') { sessionId = args[i + 1]; launchMode = 'new'; }
+    if (args[i] === '--resume') { sessionId = args[i + 1]; launchMode = 'resume'; }
+    i += 2;
+  } else if (flagsStandalone.has(args[i])) {
+    i += 1;
+  } else {
+    // Positional argument = startup prompt
+    startupPrompt = args[i];
+    i += 1;
+  }
 }
 
 if (!sessionId) {
@@ -40,9 +58,13 @@ const inboxLog = join(process.env.DUET_INBOX_DIR || process.env.DUET_RUN_DIR || 
 
 // Write startup log recording launch mode and session ID for test assertions
 const startupLog = join(process.env.DUET_INBOX_DIR || process.env.DUET_RUN_DIR || '/tmp', 'claude-startup.log');
-appendFileSync(startupLog, JSON.stringify({ tool: 'claude', launchMode, sessionId, pid: process.pid, ts: new Date().toISOString() }) + '\n');
+appendFileSync(startupLog, JSON.stringify({ tool: 'claude', launchMode, sessionId, startupPrompt: startupPrompt || null, pid: process.pid, ts: new Date().toISOString() }) + '\n');
 
-function writeSessionInit() {
+let sessionInitialized = false;
+
+function ensureSessionInit() {
+  if (sessionInitialized) return;
+  sessionInitialized = true;
   // Write initial session metadata
   appendFileSync(sessionLog, JSON.stringify({
     type: 'session',
@@ -89,13 +111,30 @@ function writeResponse(text) {
   appendFileSync(sessionLog, JSON.stringify({ type: 'result' }) + '\n');
 }
 
-// Delayed binding: wait before creating session log
-const bindDelay = parseInt(process.env.FAKE_CLAUDE_BIND_DELAY_MS || '0', 10);
-if (bindDelay > 0) {
-  console.log(`fake-claude: delaying session log by ${bindDelay}ms`);
-  setTimeout(writeSessionInit, bindDelay);
+// Session creation modes:
+//   - lazy: defer session file until first input (FAKE_CLAUDE_LAZY_SESSION=1)
+//   - delayed: create after a fixed delay (FAKE_CLAUDE_BIND_DELAY_MS)
+//   - immediate: create now (default)
+const lazySession = process.env.FAKE_CLAUDE_LAZY_SESSION === '1';
+
+if (lazySession) {
+  console.log('fake-claude: lazy session mode — will create session log on first input');
 } else {
-  writeSessionInit();
+  const bindDelay = parseInt(process.env.FAKE_CLAUDE_BIND_DELAY_MS || '0', 10);
+  if (bindDelay > 0) {
+    console.log(`fake-claude: delaying session log by ${bindDelay}ms`);
+    setTimeout(ensureSessionInit, bindDelay);
+  } else {
+    ensureSessionInit();
+  }
+}
+
+// Handle startup prompt (positional arg from warmup)
+if (startupPrompt) {
+  ensureSessionInit();
+  const responseText = generateResponse(startupPrompt);
+  writeResponse(responseText);
+  console.log(responseText);
 }
 
 const rl = createInterface({ input: process.stdin });
@@ -103,6 +142,9 @@ const rl = createInterface({ input: process.stdin });
 rl.on('line', (line) => {
   const trimmed = line.trim();
   if (!trimmed) return;
+
+  // Lazy session: create session file on first input
+  ensureSessionInit();
 
   // Log received input
   appendFileSync(inboxLog, `${new Date().toISOString()} ${trimmed}\n`);

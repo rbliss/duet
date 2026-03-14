@@ -7,6 +7,7 @@ describe('e2e: late-binding activation', { timeout: 60000 }, () => {
   const h = createE2eHarness('latebind', {
     FAKE_CLAUDE_BIND_DELAY_MS: '3000',
     FAKE_CODEX_BIND_DELAY_MS: '3000',
+    DUET_DISABLE_STARTUP_WARMUP: '1',
   });
 
   before(async () => {

@@ -6,8 +6,11 @@ import { createE2eHarness, e2eWaitFor, e2eSleep } from '../test-support/e2e-harn
 /**
  * E2e test for lazy Codex session creation (Codex v0.114.0+ behavior).
  *
+ * Uses DUET_DISABLE_STARTUP_WARMUP=1 to test the late-discovery path
+ * without the warmup prompt that normally forces session creation.
+ *
  * Proves the whole-stack flow:
- *   1. Launch headless Duet with a short bind timeout
+ *   1. Launch headless Duet with a short bind timeout and no warmup
  *   2. Codex does NOT create its session file at startup
  *   3. Reconciler finishes → Codex stays pending (not degraded)
  *   4. Send @codex <token> which triggers session file creation
@@ -17,6 +20,7 @@ import { createE2eHarness, e2eWaitFor, e2eSleep } from '../test-support/e2e-harn
 describe('e2e: lazy Codex session creation', { timeout: 60000 }, () => {
   const h = createE2eHarness('lazycx', {
     FAKE_CODEX_LAZY_SESSION: '1',
+    DUET_DISABLE_STARTUP_WARMUP: '1',
     BIND_TIMEOUT: '2',  // 1 second (2 iterations × 500ms)
   });
 
@@ -39,7 +43,7 @@ describe('e2e: lazy Codex session creation', { timeout: 60000 }, () => {
     assert.ok(b, 'bindings.json should exist');
     assert.equal(b.claude.status, 'bound', 'claude should be bound (creates session immediately)');
     assert.equal(b.codex.status, 'pending',
-      'codex should be pending (not degraded) — fresh launch with lazy session');
+      'codex should be pending (not degraded) — fresh launch with lazy session and no warmup');
   });
 
   it('first message triggers session creation and auto-binding', async () => {

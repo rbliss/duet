@@ -21,13 +21,36 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { createTuiStdin } from './tui-stdin.mjs';
 
-// Parse launch mode: `codex resume <id> ...` vs `codex ...`
+// Parse launch mode and flags
 const args = process.argv.slice(2);
 let launchMode = 'new';
 let resumeId = null;
+let startupPrompt = null;
+
+const flagsWithValue = new Set(['-c']);
+const flagsStandalone = new Set(['--dangerously-bypass-approvals-and-sandbox']);
+
+let i = 0;
 if (args[0] === 'resume' && args[1]) {
   launchMode = 'resume';
   resumeId = args[1];
+  i = 2;
+} else if (args[0] === 'fork' && args[1]) {
+  launchMode = 'fork';
+  resumeId = args[1];
+  i = 2;
+}
+
+while (i < args.length) {
+  if (flagsWithValue.has(args[i])) {
+    i += 2;
+  } else if (flagsStandalone.has(args[i])) {
+    i += 1;
+  } else {
+    // Positional argument = startup prompt
+    startupPrompt = args[i];
+    i += 1;
+  }
 }
 
 const codexHome = process.env.CODEX_HOME;
@@ -48,7 +71,7 @@ const cwd = process.cwd();
 
 // Write startup log recording launch mode and IDs for test assertions
 const startupLog = join(process.env.DUET_INBOX_DIR || process.env.DUET_RUN_DIR || '/tmp', 'codex-startup.log');
-appendFileSync(startupLog, JSON.stringify({ tool: 'codex', launchMode, resumeId, payloadId, pid: process.pid, ts: new Date().toISOString() }) + '\n');
+appendFileSync(startupLog, JSON.stringify({ tool: 'codex', launchMode, resumeId, payloadId, startupPrompt: startupPrompt || null, pid: process.pid, ts: new Date().toISOString() }) + '\n');
 
 function writeSessionInit() {
   // Write initial session metadata with payload.id (different from filename)
@@ -128,6 +151,14 @@ if (lazySession) {
   } else {
     ensureSessionInit();
   }
+}
+
+// Handle startup prompt (positional arg from warmup)
+if (startupPrompt) {
+  ensureSessionInit();
+  const responseText = `Codex ACK: ${startupPrompt}`;
+  writeResponse(responseText);
+  console.log(responseText);
 }
 
 // ─── Input processing (shared between readline and raw-TUI modes) ────────────

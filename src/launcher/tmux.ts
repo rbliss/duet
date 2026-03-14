@@ -91,10 +91,11 @@ export function createTmuxLayout(tmux: TmuxRunner, session: string): TmuxLayout 
   return { claudePane, codexPane, routerPane };
 }
 
-export function launchRouter(tmux: TmuxRunner, routerPane: string, { session, runDir, mode, claudePane, codexPane }: LaunchRouterOptions): void {
+export function launchRouter(tmux: TmuxRunner, routerPane: string, { session, runDir, mode, claudePane, codexPane, skipStartupHistory }: LaunchRouterOptions): void {
   const qRunDir = shellQuote(runDir);
   const nodeCmd = ['node', ...nodeArgs, shellQuote(entryPaths.router)].join(' ');
-  const cmd = `DUET_SESSION=${shellQuote(session)} CLAUDE_PANE=${claudePane} CODEX_PANE=${codexPane} DUET_STATE_DIR=${qRunDir} DUET_MODE=${mode} DUET_RUN_DIR=${qRunDir} ${nodeCmd}`;
+  const skipEnv = skipStartupHistory ? ' DUET_SKIP_STARTUP_HISTORY=1' : '';
+  const cmd = `DUET_SESSION=${shellQuote(session)} CLAUDE_PANE=${claudePane} CODEX_PANE=${codexPane} DUET_STATE_DIR=${qRunDir} DUET_MODE=${mode} DUET_RUN_DIR=${qRunDir}${skipEnv} ${nodeCmd}`;
   tmux('send-keys', '-t', routerPane, cmd, 'Enter');
   tmux('select-pane', '-t', routerPane);
 }

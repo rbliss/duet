@@ -32,6 +32,15 @@ import {
   destroyRun,
 } from '../runtime/workspace.js';
 
+// ─── Warmup prompt ──────────────────────────────────────────────────────────
+
+export const STARTUP_WARMUP_PROMPT = 'Startup warmup: reply READY and wait for operator instructions.';
+
+function getWarmupPrompt(): string | undefined {
+  if (process.env.DUET_DISABLE_STARTUP_WARMUP === '1') return undefined;
+  return STARTUP_WARMUP_PROMPT;
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function getConfig(): LauncherConfig {
@@ -60,31 +69,40 @@ function startReconciler(): void {
   child.unref();
 }
 
-function buildClaudeCmd(sessionId: string, promptFile: string, isResume: boolean): string {
+function buildClaudeCmd(sessionId: string, promptFile: string, isResume: boolean, startupPrompt?: string): string {
   const prompt = readFileSync(promptFile, 'utf8');
   const escapedPrompt = shellQuote(prompt);
+  let cmd: string;
   if (isResume) {
-    return `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt ${escapedPrompt}`;
+    cmd = `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt ${escapedPrompt}`;
+  } else {
+    cmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt ${escapedPrompt}`;
   }
-  return `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt ${escapedPrompt}`;
+  if (startupPrompt) cmd += ` ${shellQuote(startupPrompt)}`;
+  return cmd;
 }
 
-function buildClaudeForkCmd(oldSessionId: string, newSessionId: string, promptFile: string): string {
+function buildClaudeForkCmd(oldSessionId: string, newSessionId: string, promptFile: string, startupPrompt?: string): string {
   const prompt = readFileSync(promptFile, 'utf8');
   const escapedPrompt = shellQuote(prompt);
-  return `claude --dangerously-skip-permissions --resume ${oldSessionId} --fork-session --session-id ${newSessionId} --append-system-prompt ${escapedPrompt}`;
+  let cmd = `claude --dangerously-skip-permissions --resume ${oldSessionId} --fork-session --session-id ${newSessionId} --append-system-prompt ${escapedPrompt}`;
+  if (startupPrompt) cmd += ` ${shellQuote(startupPrompt)}`;
+  return cmd;
 }
 
-function buildCodexCmd(codexHome: string, promptFile: string, sessionId: string | null, mode: string): string {
+function buildCodexCmd(codexHome: string, promptFile: string, sessionId: string | null, mode: string, startupPrompt?: string): string {
   const qHome = shellQuote(codexHome);
   const qPrompt = shellQuote(promptFile);
+  let cmd: string;
   if (mode === 'resume' && sessionId) {
-    return `CODEX_HOME=${qHome} codex resume ${sessionId} --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=${qPrompt}`;
+    cmd = `CODEX_HOME=${qHome} codex resume ${sessionId} --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=${qPrompt}`;
+  } else if (mode === 'fork' && sessionId) {
+    cmd = `CODEX_HOME=${qHome} codex fork ${sessionId} --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=${qPrompt}`;
+  } else {
+    cmd = `CODEX_HOME=${qHome} codex --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=${qPrompt}`;
   }
-  if (mode === 'fork' && sessionId) {
-    return `CODEX_HOME=${qHome} codex fork ${sessionId} --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=${qPrompt}`;
-  }
-  return `CODEX_HOME=${qHome} codex --dangerously-bypass-approvals-and-sandbox -c model_instructions_file=${qPrompt}`;
+  if (startupPrompt) cmd += ` ${shellQuote(startupPrompt)}`;
+  return cmd;
 }
 
 function canonicalizePath(p: string): string {
@@ -168,10 +186,11 @@ export function cmdNew(workdirArg: string | undefined): void {
   buildToolPrompt('claude', workdir, claudePromptFile, join(cfg.duetDir, 'DUET.md'));
   buildToolPrompt('codex', workdir, codexPromptFile, join(cfg.duetDir, 'DUET.md'));
 
-  // Launch tools
+  // Launch tools (with warmup prompt to force session creation unless disabled)
+  const warmup = getWarmupPrompt();
   const qWorkdir = shellQuote(workdir);
-  const claudeCmd = buildClaudeCmd(claudeSessionId, claudePromptFile, false);
-  const codexCmd = buildCodexCmd(codexHome, codexPromptFile, null, 'new');
+  const claudeCmd = buildClaudeCmd(claudeSessionId, claudePromptFile, false, warmup);
+  const codexCmd = buildCodexCmd(codexHome, codexPromptFile, null, 'new', warmup);
 
   tmux('send-keys', '-t', panes.claudePane, `cd ${qWorkdir} && ${claudeCmd}`, 'Enter');
   tmux('send-keys', '-t', panes.codexPane, `cd ${qWorkdir} && ${codexCmd}`, 'Enter');
@@ -180,6 +199,7 @@ export function cmdNew(workdirArg: string | undefined): void {
   launchRouter(tmux, panes.routerPane, {
     session: tmuxSession, runDir, mode: 'new',
     claudePane: panes.claudePane, codexPane: panes.codexPane,
+    skipStartupHistory: !!warmup,
   });
 
   if (!cfg.noAttach) process.exitCode = tmuxAttach(tmuxSession, cfg.socket);
@@ -346,15 +366,16 @@ export function cmdFork(ref: string | undefined): void {
   buildToolPrompt('claude', cwd, claudePromptFile, join(cfg.duetDir, 'DUET.md'));
   buildToolPrompt('codex', cwd, codexPromptFile, join(cfg.duetDir, 'DUET.md'));
 
-  // Build commands
+  // Build commands (with warmup prompt to force session creation unless disabled)
+  const warmup = getWarmupPrompt();
   let claudeCmd: string;
   if (claudeSessionId) {
-    claudeCmd = buildClaudeForkCmd(claudeSessionId, newClaudeSid, claudePromptFile);
+    claudeCmd = buildClaudeForkCmd(claudeSessionId, newClaudeSid, claudePromptFile, warmup);
   } else {
-    claudeCmd = buildClaudeCmd(newClaudeSid, claudePromptFile, false);
+    claudeCmd = buildClaudeCmd(newClaudeSid, claudePromptFile, false, warmup);
   }
 
-  const codexCmd = buildCodexCmd(codexHome, codexPromptFile, codexSessionId, 'fork');
+  const codexCmd = buildCodexCmd(codexHome, codexPromptFile, codexSessionId, 'fork', warmup);
 
   // Write run manifest
   writeRunJson(join(newRunDir, 'run.json'), {
@@ -394,6 +415,7 @@ export function cmdFork(ref: string | undefined): void {
   launchRouter(tmux, panes.routerPane, {
     session: tmuxSession, runDir: newRunDir, mode: 'forked',
     claudePane: panes.claudePane, codexPane: panes.codexPane,
+    skipStartupHistory: !!warmup,
   });
 
   if (!cfg.noAttach) process.exitCode = tmuxAttach(tmuxSession, cfg.socket);
