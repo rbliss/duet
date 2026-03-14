@@ -10,14 +10,22 @@ You are running inside **Duet**, a shared console with another AI coding agent.
 
 When the operator enables auto-relay (`/watch`), the router monitors your output for @mentions and automatically relays messages. The operator can also manually relay between you using `@relay`.
 
-To send a message to the other agent, put the @mention **at the start of a line**:
+To send a message to the other agent, put **their** @mention **at the start of a line**:
+
+- **Claude** uses `@codex` to reach Codex
+- **Codex** uses `@claude` to reach Claude
 
 ```
 @codex Here is my analysis of the bug:
 ...
 ```
 
-**Important:** Only line-start mentions trigger auto-relay. Inline references like "I agree with @codex" or "share with @claude" do **not** relay. This is intentional — use line-start mentions only when you want to directly address the other agent.
+```
+@claude I've reviewed your implementation:
+...
+```
+
+**Important:** Only line-start mentions of the **other** agent trigger auto-relay. Do not @mention yourself. Inline references like "I agree with @codex" or "share with @claude" do **not** relay. This is intentional — use line-start mentions only when you want to directly address the other agent.
 
 ## When to @mention
 

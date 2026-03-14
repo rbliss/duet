@@ -354,6 +354,9 @@ async function handleInput(input: string): Promise<void> {
       ]);
       if (cOk && xOk) {
         console.log(`${C.yellow}-> both${C.reset}`);
+        if (!isWatching()) {
+          console.log(`${C.dim}Auto-relay is off. Run /watch if you want them to discuss directly.${C.reset}`);
+        }
       } else {
         const failed = [!cOk && 'claude', !xOk && 'codex'].filter(Boolean).join(', ');
         console.log(`${C.red}Failed to send to ${failed}${C.reset}`);

@@ -333,9 +333,16 @@ describe('transport delivery failure handling', () => {
 
   it('@both checks both sendKeys results', () => {
     const src = readRouterSource();
-    const bothBlock = src.slice(src.indexOf("case 'both':"), src.indexOf("case 'both':") + 500);
+    const bothBlock = src.slice(src.indexOf("case 'both':"), src.indexOf("case 'both':") + 600);
     assert.ok(bothBlock.includes('Promise.all'), '@both should send in parallel');
     assert.ok(bothBlock.includes('Failed to send'), '@both should report failure');
+  });
+
+  it('@both hints about /watch when auto-relay is off', () => {
+    const src = readRouterSource();
+    const bothBlock = src.slice(src.indexOf("case 'both':"), src.indexOf("case 'both':") + 600);
+    assert.ok(bothBlock.includes('isWatching'), '@both should check watch state');
+    assert.ok(bothBlock.includes('/watch'), '@both should mention /watch when auto-relay is off');
   });
 
   it('@relay checks pasteToPane result', () => {
