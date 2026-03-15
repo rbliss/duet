@@ -107,6 +107,7 @@ export interface SessionToolState {
   resolved: boolean;
   offset: number;
   lastResponse: string | null;
+  lastRelayableResponse: string | null;
   relayMode: string;
   bindingLevel: string | null;
   lastSessionActivityAt: number;
@@ -138,6 +139,7 @@ export interface BindingsManifest {
 export interface IncrementalReadResult {
   hasNew: boolean;
   complete: boolean;
+  relayContent: string | null;
 }
 
 // ─── Reconciler ─────────────────────────────────────────────────────────────

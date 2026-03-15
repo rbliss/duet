@@ -67,6 +67,7 @@ export function collectDebugSnapshot({ sessionState, routerState, bindings, runJ
       fileSize: stPath ? fileSize(stPath) : null,
       lastSessionActivityAt: st.lastSessionActivityAt || null,
       lastResponsePreview: truncate(st.lastResponse as string | null, previewLen),
+      lastRelayableResponsePreview: truncate(st.lastRelayableResponse as string | null, previewLen),
       sessionLogTail: logTail,
       // bindings.json state
       manifest: bindingsEntry ? {
@@ -199,6 +200,10 @@ export function renderDebugReport(snapshot: Record<string, unknown>): string {
     }
     if (t.lastResponsePreview) {
       lines.push(`  last response: ${t.lastResponsePreview}`);
+    }
+    if ((t.lastRelayableResponsePreview ?? null) !== (t.lastResponsePreview ?? null)) {
+      const relayLabel = t.lastRelayableResponsePreview || '(none — last response is non-relayable)';
+      lines.push(`  relay source:  ${relayLabel}`);
     }
     const sessionLogTail = t.sessionLogTail as { lines: string[]; totalLines: number } | null;
     if (sessionLogTail) {

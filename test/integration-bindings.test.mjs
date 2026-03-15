@@ -36,8 +36,8 @@ describe('end-to-end session binding', () => {
 
   function resetSessionState() {
     setStateDir(stateDir);
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
-    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
   }
 
   function writeBindings(claude, codex) {
@@ -227,7 +227,7 @@ describe('binding lifecycle', () => {
 
   it('loadBindings re-reads manifest while tools are pending', () => {
     setStateDir(stateDir2);
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
 
     writeFileSync(join(stateDir2, 'bindings.json'), JSON.stringify({
       claude: { path: null, level: null, status: 'pending', confirmedAt: null },
@@ -250,8 +250,8 @@ describe('binding lifecycle', () => {
 
   it('stops re-reading manifest once all tools are final', () => {
     setStateDir(stateDir2);
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
-    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
 
     writeFileSync(join(stateDir2, 'bindings.json'), JSON.stringify({
       claude: { path: null, level: null, status: 'degraded', confirmedAt: null },
@@ -510,8 +510,8 @@ describe('EOF-seek on resume', () => {
     setStateDir(stateDir);
     setDuetMode('resumed');
     setRunDir(stateDir);
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
-    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
   }
 
   it('seeks reader to EOF when mode is resumed', () => {
@@ -550,7 +550,7 @@ describe('EOF-seek on resume', () => {
     }));
 
     setDuetMode('new');
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
 
     resolveSessionPath('claude');
     assert.equal(sessionState.claude.offset, 0);
@@ -598,8 +598,8 @@ describe('binding propagation to run.json', () => {
     setStateDir(stateDir);
     setDuetMode('new');
     setRunDir(stateDir);
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
-    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
 
     resolveSessionPath('claude');
 
@@ -967,7 +967,7 @@ describe('late discovery via rebindTool', () => {
     writeFileSync(join(stateDir, 'run.json'), JSON.stringify({ run_id: 'test', status: 'active' }));
 
     // Start as pending (no bindings.json bound entry)
-    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
 
     // Write a late session file
     const meta = JSON.stringify({ type: 'session_meta', payload: { id: 'late-codex-id', cwd: '/test' } });

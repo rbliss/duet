@@ -84,6 +84,7 @@ describe('rebind candidate search', () => {
     sessionState.claude.resolved = false;
     sessionState.claude.offset = 0;
     sessionState.claude.lastResponse = null;
+    sessionState.claude.lastRelayableResponse = null;
     sessionState.claude.relayMode = 'pending';
     sessionState.claude.lastSessionActivityAt = 0;
     sessionState.codex.path = null;
@@ -197,8 +198,8 @@ describe('codex rebind session ID extraction', () => {
     rmSync(testDir, { recursive: true, force: true });
     setRunDir(null);
     setStateDir(null);
-    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
-    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.codex = { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
+    sessionState.claude = { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 };
   });
 
   it('extractCodexSessionId reads payload.id from first JSONL line', () => {
@@ -733,5 +734,46 @@ describe('renderDebugReport', () => {
     const report = renderDebugReport(snapshot);
     assert.ok(report.includes('degraded'), 'report should show degraded, not pane');
     assert.ok(!report.includes('status: pane'), 'report must not show raw pane label');
+  });
+
+  it('shows relay source divergence when lastResponse differs from lastRelayableResponse', () => {
+    const snapshot = collectDebugSnapshot({
+      sessionState: {
+        claude: {
+          path: '/tmp/c.jsonl', resolved: true, offset: 100,
+          lastResponse: 'Request too large (max 20MB). Double press esc to go back.',
+          lastRelayableResponse: '@codex Here is the real implementation.',
+          relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: Date.now(),
+        },
+        codex: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
+      },
+      routerState: { watching: true, converseState: null, pendingTools: [], watcherFailed: [], fileWatcherActive: { claude: true, codex: false } },
+      bindings: null,
+      runJson: null,
+    });
+    const report = renderDebugReport(snapshot);
+    assert.ok(report.includes('last response:'), 'report should show raw last response');
+    assert.ok(report.includes('Request too large'), 'report should show the error text as last response');
+    assert.ok(report.includes('relay source:'), 'report should show relay source when it diverges');
+    assert.ok(report.includes('@codex Here is the real implementation'), 'relay source should show the relayable response');
+  });
+
+  it('shows non-relayable indicator when lastRelayableResponse is null but lastResponse exists', () => {
+    const snapshot = collectDebugSnapshot({
+      sessionState: {
+        claude: {
+          path: '/tmp/c.jsonl', resolved: true, offset: 50,
+          lastResponse: 'Request too large (max 20MB).',
+          lastRelayableResponse: null,
+          relayMode: 'session', bindingLevel: 'process', lastSessionActivityAt: Date.now(),
+        },
+        codex: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pane', bindingLevel: null, lastSessionActivityAt: 0 },
+      },
+      routerState: { watching: true, converseState: null, pendingTools: [], watcherFailed: [], fileWatcherActive: { claude: true, codex: false } },
+      bindings: null,
+      runJson: null,
+    });
+    const report = renderDebugReport(snapshot);
+    assert.ok(report.includes('non-relayable'), 'report should indicate relay source is non-relayable');
   });
 });

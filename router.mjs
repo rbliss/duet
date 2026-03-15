@@ -12,6 +12,7 @@ export { collectDebugSnapshot, renderDebugReport } from './src/debug/debug-repor
 export {
   sessionState, resolveSessionPath, readIncremental,
   extractClaudeResponse, extractCodexResponse, isResponseComplete,
+  isClaudeApiError, isClaudeApiErrorObj, getLastRelayableResponse,
   getClaudeLastResponse, getCodexLastResponse, getLastResponse,
   setDuetMode, extractCodexSessionId,
 } from './src/relay/session-reader.js';

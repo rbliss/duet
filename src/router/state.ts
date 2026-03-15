@@ -15,7 +15,7 @@ import type {
 
 import {
   sessionState as _sessionState, resolveSessionPath, readIncremental,
-  isResponseComplete, getLastResponse, extractCodexSessionId,
+  isResponseComplete, getLastResponse, getLastRelayableResponse, extractCodexSessionId,
 } from '../relay/session-reader.js';
 
 const sessionState = _sessionState as SessionStateMap;
@@ -92,11 +92,13 @@ export function bindingStatus(tool: ToolName): string {
 }
 
 /**
- * Get the latest structured session response for a tool, or null if unavailable.
+ * Get the latest relayable session response for a tool, or null if unavailable.
+ * Returns the last response that passed the relayability filter (excludes
+ * synthetic API error messages that would clobber real relay content).
  */
 export function getSessionResponse(tool: ToolName): string | null {
-  const logResponse = getLastResponse(tool) as string | null;
-  return (logResponse && logResponse.length > 0) ? logResponse : null;
+  const response = getLastRelayableResponse(tool);
+  return (response && response.length > 0) ? response : null;
 }
 
 /**
@@ -164,29 +166,44 @@ function stopFileWatcher(tool: string): void {
     clearTimeout(fileDebounceTimers[tool]);
     delete fileDebounceTimers[tool];
   }
+  delete pendingRelayContent[tool];
 }
 
 export function stopFileWatchers(): void {
   for (const tool of Object.keys(fileWatchers)) stopFileWatcher(tool);
 }
 
+// Relay content captured at debounce-scheduling time to prevent clobbering
+// by later non-relayable error text
+const pendingRelayContent: Record<string, string> = {};
+
 function onFileChange(tool: string): void {
   if (!monitoringActive) return;
   // Always process new session data (keeps lastResponse fresh for @relay)
-  const { hasNew, complete } = readIncremental(tool as ToolName);
+  const { hasNew, complete, relayContent } = readIncremental(tool as ToolName);
   if (!hasNew) return;
   sessionState[tool as ToolName].lastSessionActivityAt = Date.now();
   // Only schedule auto-relay if watch mode or converse mode is active
   if (!autoRelayEnabled && !converseState) return;
-  if (fileDebounceTimers[tool]) clearTimeout(fileDebounceTimers[tool]);
-  const delay = complete ? SESSION_COMPLETE_MS : SESSION_DEBOUNCE_MS;
-  fileDebounceTimers[tool] = setTimeout(() => triggerSessionRelay(tool), delay);
+
+  if (relayContent) {
+    // New relayable content — capture and (re)schedule relay
+    pendingRelayContent[tool] = relayContent;
+    if (fileDebounceTimers[tool]) clearTimeout(fileDebounceTimers[tool]);
+    const delay = complete ? SESSION_COMPLETE_MS : SESSION_DEBOUNCE_MS;
+    fileDebounceTimers[tool] = setTimeout(() => triggerSessionRelay(tool), delay);
+  } else if (complete && pendingRelayContent[tool]) {
+    // Completion signal without new relayable content — accelerate pending relay
+    if (fileDebounceTimers[tool]) clearTimeout(fileDebounceTimers[tool]);
+    fileDebounceTimers[tool] = setTimeout(() => triggerSessionRelay(tool), SESSION_COMPLETE_MS);
+  }
 }
 
 async function triggerSessionRelay(tool: string): Promise<void> {
-  const st = sessionState[tool as ToolName];
-  if (!st.lastResponse) return;
-  if (newOutputHandler) await newOutputHandler(tool as ToolName, st.lastResponse);
+  const content = pendingRelayContent[tool];
+  delete pendingRelayContent[tool];
+  if (!content) return;
+  if (newOutputHandler) await newOutputHandler(tool as ToolName, content);
 }
 
 // ─── Polling start / stop ────────────────────────────────────────────────────
@@ -237,6 +254,7 @@ function pollBindings(): void {
       if (SKIP_STARTUP_HISTORY) {
         try { const { size } = statSync(st.path); st.offset = size; } catch {}
         st.lastResponse = null;
+        st.lastRelayableResponse = null;
       }
       if (startFileWatcher(name)) {
         console.log(`\n${C.green}${name}: binding resolved — session log watcher active${C.reset}`);
@@ -274,6 +292,7 @@ export function startMonitoring(): void {
       if (SKIP_STARTUP_HISTORY) {
         try { const { size } = statSync(st.path); st.offset = size; } catch {}
         st.lastResponse = null;
+        st.lastRelayableResponse = null;
       }
       if (startFileWatcher(name)) {
         // event-driven session log watcher
@@ -315,6 +334,7 @@ export function stopAll(): void {
   stopFileWatchers();
   pendingTools = new Set();
   watcherFailed.clear();
+  for (const key of Object.keys(pendingRelayContent)) delete pendingRelayContent[key];
 }
 
 // Backward compat aliases used by tests
@@ -363,6 +383,7 @@ export async function rebindTool(tool: ToolName, newPath: string): Promise<{ old
   st.resolved = true;
   st.relayMode = 'session';
   st.lastResponse = null;
+  st.lastRelayableResponse = null;
 
   try {
     const { size } = statSync(newPath);

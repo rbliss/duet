@@ -27,8 +27,8 @@ export function setDuetMode(mode: string): void { DUET_MODE = mode; }
 //   'process'   — bound to exact launched process (both Claude and Codex)
 //   null        — not yet bound
 export const sessionState: SessionStateMap = {
-  claude: { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 },
-  codex:  { path: null, resolved: false, offset: 0, lastResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 },
+  claude: { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 },
+  codex:  { path: null, resolved: false, offset: 0, lastResponse: null, lastRelayableResponse: null, relayMode: 'pending', bindingLevel: null, lastSessionActivityAt: 0 },
 };
 
 export function resolveSessionPath(tool: ToolName): string | null {
@@ -121,15 +121,52 @@ export function isResponseComplete(tool: string, obj: Record<string, unknown>): 
   return false;
 }
 
+/**
+ * Detect Claude Code synthetic API error messages via structured JSONL fields.
+ * Claude Code marks these entries with `isApiErrorMessage: true` and/or an
+ * `error` field. Checking these first catches any error wording we haven't
+ * seen yet.
+ */
+export function isClaudeApiErrorObj(obj: Record<string, unknown>): boolean {
+  if (obj.isApiErrorMessage === true) return true;
+  if (obj.type === 'error') return true;
+  if (typeof obj.error === 'string' && obj.error.length > 0) return true;
+  const msg = obj.message as Record<string, unknown> | undefined;
+  if (msg?.isApiErrorMessage === true) return true;
+  if (typeof msg?.error === 'string' && (msg.error as string).length > 0) return true;
+  return false;
+}
+
+/**
+ * Detect Claude Code synthetic API error messages by text content (fallback).
+ * Catches known error text patterns when the JSONL entry lacks structured
+ * error markers.
+ */
+export function isClaudeApiError(text: string): boolean {
+  const trimmed = text.trim();
+  if (/^Request too large\b/.test(trimmed)) return true;
+  if (/^(invalid_request_error|overloaded_error|rate_limit_error|api_error|authentication_error|permission_error|not_found_error|server_error)\b/.test(trimmed)) return true;
+  return false;
+}
+
+function isRelayable(tool: ToolName, text: string, obj: Record<string, unknown>): boolean {
+  if (tool === 'codex') return true;
+  // Structured markers first — catches any error wording
+  if (isClaudeApiErrorObj(obj)) return false;
+  // Text fallback for entries without structured markers
+  return !isClaudeApiError(text);
+}
+
 export function readIncremental(tool: ToolName): IncrementalReadResult {
   const st = sessionState[tool];
   const filePath = resolveSessionPath(tool);
-  if (!filePath) return { hasNew: false, complete: false };
+  if (!filePath) return { hasNew: false, complete: false, relayContent: null };
   let hasNew = false;
   let complete = false;
+  let relayContent: string | null = null;
   try {
     const { size } = statSync(filePath);
-    if (size <= st.offset) return { hasNew: false, complete: false };
+    if (size <= st.offset) return { hasNew: false, complete: false, relayContent: null };
     const fd = openSync(filePath, 'r');
     try {
       const len = size - st.offset;
@@ -138,7 +175,7 @@ export function readIncremental(tool: ToolName): IncrementalReadResult {
       const chunk = buf.toString('utf8');
       // Only process complete lines; save any trailing partial line for next read
       const lastNl = chunk.lastIndexOf('\n');
-      if (lastNl < 0) return { hasNew: false, complete: false };
+      if (lastNl < 0) return { hasNew: false, complete: false, relayContent: null };
       const completeText = chunk.slice(0, lastNl);
       st.offset += lastNl + 1; // advance past the newline
       // Parse lines and update cached response
@@ -150,7 +187,14 @@ export function readIncremental(tool: ToolName): IncrementalReadResult {
           const extracted = tool === 'claude'
             ? extractClaudeResponse(obj)
             : extractCodexResponse(obj);
-          if (extracted) { st.lastResponse = extracted; hasNew = true; }
+          if (extracted) {
+            st.lastResponse = extracted;
+            hasNew = true;
+            if (isRelayable(tool, extracted, obj)) {
+              st.lastRelayableResponse = extracted;
+              relayContent = extracted;
+            }
+          }
           if (isResponseComplete(tool, obj)) complete = true;
         } catch {}
       }
@@ -158,7 +202,7 @@ export function readIncremental(tool: ToolName): IncrementalReadResult {
       closeSync(fd);
     }
   } catch {}
-  return { hasNew, complete };
+  return { hasNew, complete, relayContent };
 }
 
 export function getClaudeLastResponse(): string | null {
@@ -173,6 +217,11 @@ export function getCodexLastResponse(): string | null {
 
 export function getLastResponse(tool: ToolName): string | null {
   return tool === 'claude' ? getClaudeLastResponse() : getCodexLastResponse();
+}
+
+export function getLastRelayableResponse(tool: ToolName): string | null {
+  readIncremental(tool);
+  return sessionState[tool].lastRelayableResponse;
 }
 
 export function extractCodexSessionId(filePath: string): string | null {
